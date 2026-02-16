@@ -10,7 +10,9 @@
       "Bash(python *)",
       "Bash(python -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/ci.yml''\\)\\); print\\(''YAML syntax OK''\\)\")",
       "Bash(uv run:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh run view:*)"
     ]
   }
 }
