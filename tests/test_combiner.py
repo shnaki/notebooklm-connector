@@ -3,6 +3,8 @@
 import logging
 from pathlib import Path
 
+import pytest
+
 from notebooklm_connector.combiner import combine
 from notebooklm_connector.models import CombineConfig
 
@@ -94,7 +96,7 @@ def test_combine_empty_directory(tmp_path: Path) -> None:
 
 
 def test_combine_warns_on_large_output(
-    tmp_path: Path, caplog: logging.LogRecordTuple
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """500,000 語を超える場合に警告が出ること。"""
     input_dir = tmp_path / "md"
