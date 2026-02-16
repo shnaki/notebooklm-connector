@@ -1,28 +1,69 @@
 # notebooklm-connector
 
-Add your description here.
+Webサイトのドキュメントをクロールし、[NotebookLM](https://notebooklm.google.com/) に最適化されたMarkdownファイルに変換するCLIツールです。
 
-## 開発環境のセットアップ
+## 主な機能
 
-このプロジェクトでは `uv` を使用して依存関係を管理しています。
+- **クロール**: BFSアルゴリズムによるWebサイトのHTMLダウンロード
+- **変換**: HTMLからMarkdownへの変換（ナビゲーション・画像等の不要要素を除去）
+- **結合**: 複数のMarkdownファイルを1つに結合
+- **パイプライン**: 上記3ステップを一括実行
 
-### 準備
-
-1. [uv](https://github.com/astral-sh/uv) をインストールします。
-2. 以下のコマンドを実行して仮想環境を作成し、依存関係をインストールします。
+## インストール
 
 ```bash
 uv sync
 ```
 
+## 使い方
+
+### パイプライン（一括実行）
+
+```bash
+uv run notebooklm-connector pipeline https://example.com/docs -o output/
+```
+
+`output/html/`、`output/md/`、`output/combined.md` が生成されます。
+
+### 個別実行
+
+```bash
+# Webサイトをクロールしてhtmlを保存
+uv run notebooklm-connector crawl https://example.com/docs -o html/ --max-pages 50 --delay 1.0
+
+# HTMLをMarkdownに変換
+uv run notebooklm-connector convert html/ -o md/
+
+# ZIPファイルからも変換可能
+uv run notebooklm-connector convert archive.zip -o md/ --zip
+
+# Markdownファイルを1つに結合
+uv run notebooklm-connector combine md/ -o combined.md
+```
+
+## 開発
+
+### セットアップ
+
+1. [uv](https://github.com/astral-sh/uv) をインストールします。
+2. 依存関係をインストールします。
+
+```bash
+uv sync
+```
+
+3. pre-commit フックをインストールします。
+
+```bash
+uv run pre-commit install
+```
+
 ### 開発用ツール
 
 - **Lint/Format**: Ruff
-  - `uv run ruff check` (Lint)
-  - `uv run ruff format` (Format)
-- **型チェック**: mypy
-  - `uv run mypy src`
+  - `uv run --frozen ruff check .` (Lint)
+  - `uv run --frozen ruff format .` (Format)
+- **型チェック**: Pyright
+  - `uv run --frozen pyright`
 - **テスト**: pytest
-  - `uv run pytest`
-- **Gitフック**: pre-commit
-  - `uv run pre-commit install` でインストール
+  - `uv run --frozen pytest`
