@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh issue view:*)",
+      "Bash(python3:*)",
+      "Bash(git*)",
+      "WebSearch",
+      "Bash(uv *)",
+      "Bash(.venv/Scripts/*)",
+      "Bash(python -m *)"
+    ]
+  }
+}
