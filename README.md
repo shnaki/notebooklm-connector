@@ -1,4 +1,4 @@
-# notebooklm-conector
+# notebooklm-connector
 
 Add your description here.
 
