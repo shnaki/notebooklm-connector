@@ -5,8 +5,8 @@ Webサイトのドキュメントをクロールし、[NotebookLM](https://noteb
 ## 主な機能
 
 - **クロール**: BFSアルゴリズムによるWebサイトのHTMLダウンロード
-- **変換**: HTMLからMarkdownへの変換（ナビゲーション・画像等の不要要素を除去）
-- **結合**: 複数のMarkdownファイルを1つに結合
+- **変換**: HTMLからMarkdownへの変換（画像等の不要要素を除去）
+- **結合**: 複数のMarkdownファイルを1つに結合（500,000語超で自動分割）
 - **パイプライン**: 上記3ステップを一括実行
 
 ## インストール
@@ -23,7 +23,8 @@ uv sync
 uv run notebooklm-connector pipeline https://example.com/docs -o output/
 ```
 
-`output/html/`、`output/md/`、`output/combined.md` が生成されます。
+`output/html/`、`output/md/`、`output/combined.md` が生成されます。語数が500,000語を超える場合は `combined-001.md`、
+`combined-002.md` のように自動分割されます。
 
 ### 個別実行
 
@@ -37,7 +38,7 @@ uv run notebooklm-connector convert html/ -o md/
 # ZIPファイルからも変換可能
 uv run notebooklm-connector convert archive.zip -o md/ --zip
 
-# Markdownファイルを1つに結合
+# Markdownファイルを1つに結合（500,000語超で自動分割）
 uv run notebooklm-connector combine md/ -o combined.md
 ```
 
@@ -61,9 +62,9 @@ uv run pre-commit install
 ### 開発用ツール
 
 - **Lint/Format**: Ruff
-  - `uv run --frozen ruff check .` (Lint)
-  - `uv run --frozen ruff format .` (Format)
+    - `uv run --frozen ruff check .` (Lint)
+    - `uv run --frozen ruff format .` (Format)
 - **型チェック**: Pyright
-  - `uv run --frozen pyright`
+    - `uv run --frozen pyright`
 - **テスト**: pytest
-  - `uv run --frozen pytest`
+    - `uv run --frozen pytest`
