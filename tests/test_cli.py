@@ -110,11 +110,10 @@ def test_cli_convert_zip(tmp_path: Path) -> None:
     main(
         [
             "convert",
-            str(tmp_path),
+            str(zip_path),
             "-o",
             str(output_dir),
             "--zip",
-            str(zip_path),
         ]
     )
 
