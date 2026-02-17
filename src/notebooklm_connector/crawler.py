@@ -137,6 +137,26 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
                 continue
             visited.add(url)
 
+            # ファイル名を先に計算
+            filename = _url_to_filename(url, config.start_url)
+            filepath = config.output_dir / filename
+
+            # キャッシュチェック: ファイルが存在すれば HTTP リクエストをスキップ
+            if filepath.exists():
+                logger.info(
+                    "[%d/%d] キャッシュ使用: %s",
+                    len(visited),
+                    config.max_pages,
+                    url,
+                )
+                html = filepath.read_text(encoding="utf-8")
+                saved_files.append(filepath)
+                new_links = _discover_links(html, url, url_prefix)
+                for link in new_links:
+                    if link not in visited:
+                        queue.append(link)
+                continue
+
             logger.info(
                 "[%d/%d] クロール中: %s",
                 len(visited),
@@ -159,8 +179,6 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
             html = response.text
 
             # ファイル保存
-            filename = _url_to_filename(url, config.start_url)
-            filepath = config.output_dir / filename
             filepath.write_text(html, encoding="utf-8")
             saved_files.append(filepath)
 

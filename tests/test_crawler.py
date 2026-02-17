@@ -251,3 +251,56 @@ def test_crawl_custom_prefix(tmp_path: Path) -> None:
     # start_url 自体は prefix 外だが最初にアクセスされる
     # page1 のみが prefix に一致
     assert len(result) >= 1
+
+
+def test_crawl_uses_cache(tmp_path: Path) -> None:
+    """出力ディレクトリに既存 HTML があれば HTTP リクエストをスキップすること。"""
+    output_dir = tmp_path / "html"
+    output_dir.mkdir()
+
+    # キャッシュファイルを事前に配置（リンクなし）
+    cached_html = "<html><body><h1>Cached</h1></body></html>"
+    (output_dir / "index.html").write_text(cached_html, encoding="utf-8")
+
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=output_dir,
+        max_pages=10,
+        delay_seconds=0,
+    )
+
+    # HTTP リクエストが来たら失敗させる
+    def fail_handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"HTTP リクエストが発生すべきでない: {request.url}")
+
+    client = httpx.Client(transport=httpx.MockTransport(fail_handler))
+    result = crawl(config, client=client)
+
+    assert len(result) == 1
+    assert result[0].read_text(encoding="utf-8") == cached_html
+
+
+def test_crawl_cache_discovers_links(tmp_path: Path) -> None:
+    """キャッシュされたページからもリンクが探索され新しいページがクロールされること。"""
+    output_dir = tmp_path / "html"
+    output_dir.mkdir()
+
+    # キャッシュファイルにリンクを含める
+    cached_html = '<html><body><a href="/docs/page1">Page 1</a></body></html>'
+    (output_dir / "index.html").write_text(cached_html, encoding="utf-8")
+
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=output_dir,
+        max_pages=10,
+        delay_seconds=0,
+    )
+
+    client = _make_mock_client()
+    result = crawl(config, client=client)
+
+    # index.html はキャッシュ、page1 は HTTP で取得
+    assert len(result) == 2
+    filenames = {f.name for f in result}
+    assert "index.html" in filenames
+    assert "docs_page1.html" in filenames
