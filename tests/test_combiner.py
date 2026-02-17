@@ -20,7 +20,7 @@ def test_combine_merges_files(tmp_path: Path) -> None:
     config = CombineConfig(input_dir=input_dir, output_file=output_file)
     result = combine(config)
 
-    assert result == output_file
+    assert result == [output_file]
     assert output_file.exists()
 
     content = output_file.read_text(encoding="utf-8")
@@ -41,7 +41,7 @@ def test_combine_adds_source_header(tmp_path: Path) -> None:
     combine(config)
 
     content = output_file.read_text(encoding="utf-8")
-    assert "<!-- Source: page.md -->" in content
+    assert "Source: page.md" in content
 
 
 def test_combine_no_source_header(tmp_path: Path) -> None:
@@ -59,7 +59,7 @@ def test_combine_no_source_header(tmp_path: Path) -> None:
     combine(config)
 
     content = output_file.read_text(encoding="utf-8")
-    assert "<!-- Source:" not in content
+    assert "Source:" not in content
 
 
 def test_combine_uses_separator(tmp_path: Path) -> None:
@@ -91,14 +91,14 @@ def test_combine_empty_directory(tmp_path: Path) -> None:
     config = CombineConfig(input_dir=input_dir, output_file=output_file)
     result = combine(config)
 
-    assert result == output_file
+    assert result == [output_file]
     assert output_file.read_text(encoding="utf-8") == ""
 
 
 def test_combine_warns_on_large_output(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """500,000 語を超える場合に警告が出ること。"""
+    """500,000 語を超える場合にファイルが分割されること。"""
     input_dir = tmp_path / "md"
     input_dir.mkdir()
 
@@ -114,10 +114,11 @@ def test_combine_warns_on_large_output(
         add_source_header=False,
     )
 
-    with caplog.at_level(logging.WARNING):
-        combine(config)
+    with caplog.at_level(logging.INFO):
+        result = combine(config)
 
-    assert any("500000" in r.message for r in caplog.records)
+    assert len(result) > 1
+    assert any("分割" in r.message for r in caplog.records)
 
 
 def test_combine_recursive(tmp_path: Path) -> None:
@@ -155,4 +156,69 @@ def test_combine_source_header_relative_path(tmp_path: Path) -> None:
     combine(config)
 
     content = output_file.read_text(encoding="utf-8")
-    assert "<!-- Source: guide/start.md -->" in content
+    assert "Source: guide/start.md" in content
+
+
+def test_combine_splits_large_output(tmp_path: Path) -> None:
+    """閾値超過時にファイルが分割されること。"""
+    input_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    large_text = ("word " * 300_000).strip() + "\n"
+    (input_dir / "a.md").write_text(large_text, encoding="utf-8")
+    (input_dir / "b.md").write_text(large_text, encoding="utf-8")
+
+    output_file = tmp_path / "combined.md"
+    config = CombineConfig(
+        input_dir=input_dir,
+        output_file=output_file,
+        add_source_header=False,
+    )
+    result = combine(config)
+
+    assert len(result) == 2
+    assert all(p.exists() for p in result)
+    # 元のファイルは生成されない
+    assert not output_file.exists()
+
+
+def test_combine_split_file_naming(tmp_path: Path) -> None:
+    """分割ファイルの命名が -001 形式であること。"""
+    input_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    large_text = ("word " * 300_000).strip() + "\n"
+    (input_dir / "a.md").write_text(large_text, encoding="utf-8")
+    (input_dir / "b.md").write_text(large_text, encoding="utf-8")
+
+    output_file = tmp_path / "combined.md"
+    config = CombineConfig(
+        input_dir=input_dir,
+        output_file=output_file,
+        add_source_header=False,
+    )
+    result = combine(config)
+
+    assert result[0].name == "combined-001.md"
+    assert result[1].name == "combined-002.md"
+
+
+def test_combine_no_split_under_threshold(tmp_path: Path) -> None:
+    """閾値以下では分割されないこと。"""
+    input_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    small_text = ("word " * 100).strip() + "\n"
+    (input_dir / "a.md").write_text(small_text, encoding="utf-8")
+    (input_dir / "b.md").write_text(small_text, encoding="utf-8")
+
+    output_file = tmp_path / "combined.md"
+    config = CombineConfig(
+        input_dir=input_dir,
+        output_file=output_file,
+        add_source_header=False,
+    )
+    result = combine(config)
+
+    assert result == [output_file]
+    assert output_file.exists()
