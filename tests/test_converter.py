@@ -110,7 +110,7 @@ def test_convert_directory_empty(tmp_path: Path) -> None:
 
 
 def test_convert_zip_creates_md_files(tmp_path: Path) -> None:
-    """ZIP 内の HTML がすべて変換されること。"""
+    """ZIP 内の HTML がすべて変換され階層構造が維持されること。"""
     zip_path = tmp_path / "docs.zip"
     output_dir = tmp_path / "md"
 
@@ -124,6 +124,8 @@ def test_convert_zip_creates_md_files(tmp_path: Path) -> None:
     result = convert_zip(zip_path, output_dir)
 
     assert len(result) == 2
+    assert (output_dir / "index.md").exists()
+    assert (output_dir / "guide" / "start.md").exists()
     contents = [p.read_text(encoding="utf-8") for p in result]
     all_text = "\n".join(contents)
     assert "Index" in all_text
@@ -156,3 +158,72 @@ def test_convert_custom_strip_classes() -> None:
     result = convert_html_to_markdown(html, config)
     assert "Ad" not in result
     assert "Content" in result
+
+
+def test_convert_directory_recursive(tmp_path: Path) -> None:
+    """サブディレクトリ内の HTML が変換され階層構造が維持されること。"""
+    input_dir = tmp_path / "html"
+    sub_dir = input_dir / "guide"
+    sub_dir.mkdir(parents=True)
+    output_dir = tmp_path / "md"
+
+    (input_dir / "index.html").write_text(
+        "<main><h1>Index</h1></main>", encoding="utf-8"
+    )
+    (sub_dir / "start.html").write_text("<main><h1>Start</h1></main>", encoding="utf-8")
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
+    result = convert_directory(config)
+
+    assert len(result) == 2
+    assert (output_dir / "index.md").exists()
+    assert (output_dir / "guide" / "start.md").exists()
+    assert "Start" in (output_dir / "guide" / "start.md").read_text(encoding="utf-8")
+
+
+def test_convert_directory_htm_extension(tmp_path: Path) -> None:
+    """.htm ファイルも変換対象になること。"""
+    input_dir = tmp_path / "html"
+    input_dir.mkdir()
+    output_dir = tmp_path / "md"
+
+    (input_dir / "page.htm").write_text(
+        "<main><h1>HTM Page</h1></main>", encoding="utf-8"
+    )
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
+    result = convert_directory(config)
+
+    assert len(result) == 1
+    assert (output_dir / "page.md").exists()
+    assert "HTM Page" in (output_dir / "page.md").read_text(encoding="utf-8")
+
+
+def test_convert_zip_preserves_hierarchy(tmp_path: Path) -> None:
+    """ZIP 内の階層構造が出力に維持されること。"""
+    zip_path = tmp_path / "docs.zip"
+    output_dir = tmp_path / "md"
+
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("index.html", "<main><h1>Index</h1></main>")
+        zf.writestr("docs/api/ref.html", "<main><h1>API Ref</h1></main>")
+
+    convert_zip(zip_path, output_dir)
+
+    assert (output_dir / "index.md").exists()
+    assert (output_dir / "docs" / "api" / "ref.md").exists()
+
+
+def test_convert_zip_htm_extension(tmp_path: Path) -> None:
+    """ZIP 内の .htm ファイルも変換対象になること。"""
+    zip_path = tmp_path / "docs.zip"
+    output_dir = tmp_path / "md"
+
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("page.htm", "<main><h1>HTM in ZIP</h1></main>")
+
+    result = convert_zip(zip_path, output_dir)
+
+    assert len(result) == 1
+    assert (output_dir / "page.md").exists()
+    assert "HTM in ZIP" in result[0].read_text(encoding="utf-8")

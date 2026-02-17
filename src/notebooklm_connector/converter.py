@@ -123,18 +123,22 @@ def convert_directory(config: ConvertConfig) -> list[Path]:
     """
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
-    html_files = sorted(config.input_dir.glob("*.html"))
+    html_files = sorted(
+        [*config.input_dir.rglob("*.html"), *config.input_dir.rglob("*.htm")]
+    )
     if not html_files:
         logger.warning("HTML ファイルが見つかりません: %s", config.input_dir)
         return []
 
     output_paths: list[Path] = []
     for html_file in html_files:
-        logger.info("変換中: %s", html_file.name)
+        relative = html_file.relative_to(config.input_dir)
+        logger.info("変換中: %s", relative)
         html_content = html_file.read_text(encoding="utf-8")
         markdown = convert_html_to_markdown(html_content, config)
 
-        output_path = config.output_dir / html_file.with_suffix(".md").name
+        output_path = config.output_dir / relative.with_suffix(".md")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(markdown, encoding="utf-8")
         output_paths.append(output_path)
 
@@ -167,7 +171,7 @@ def convert_zip(
         html_names = sorted(
             name
             for name in zf.namelist()
-            if name.endswith(".html") and not name.startswith("__MACOSX")
+            if name.endswith((".html", ".htm")) and not name.startswith("__MACOSX")
         )
 
         for name in html_names:
@@ -175,9 +179,8 @@ def convert_zip(
             html_content = zf.read(name).decode("utf-8")
             markdown = convert_html_to_markdown(html_content, config)
 
-            # ネストされたパスをフラットなファイル名にする
-            flat_name = Path(name).stem.replace("/", "_").replace("\\", "_") + ".md"
-            output_path = output_dir / flat_name
+            output_path = output_dir / Path(name).with_suffix(".md")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(markdown, encoding="utf-8")
             output_paths.append(output_path)
 
