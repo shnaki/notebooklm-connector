@@ -144,8 +144,9 @@ def _run_convert(args: argparse.Namespace) -> None:
 def _run_combine(args: argparse.Namespace) -> None:
     """combine サブコマンドを実行する。"""
     config = CombineConfig(input_dir=args.input, output_file=args.output)
-    output = combine(config)
-    print(f"結合ファイルを生成しました: {output}")
+    outputs = combine(config)
+    for output in outputs:
+        print(f"結合ファイルを生成しました: {output}")
 
 
 def _run_pipeline(args: argparse.Namespace) -> None:
@@ -175,8 +176,9 @@ def _run_pipeline(args: argparse.Namespace) -> None:
     # Step 3: Combine
     print("=== Step 3/3: 結合 ===")
     combine_config = CombineConfig(input_dir=md_dir, output_file=combined_file)
-    output = combine(combine_config)
-    print(f"結合ファイルを生成しました: {output}")
+    outputs = combine(combine_config)
+    for output in outputs:
+        print(f"結合ファイルを生成しました: {output}")
 
 
 def main(argv: list[str] | None = None) -> None:
