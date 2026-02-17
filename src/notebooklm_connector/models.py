@@ -13,6 +13,7 @@ class CrawlConfig:
     max_pages: int = 100
     delay_seconds: float = 1.0
     url_prefix: str = ""
+    max_concurrency: int = 5
 
 
 @dataclass
@@ -33,6 +34,7 @@ class ConvertConfig:
             "iframe",
         ]
     )
+    max_workers: int | None = None
     strip_classes: list[str] = field(
         default_factory=lambda: [
             "sidebar",

@@ -4,8 +4,8 @@ Webサイトのドキュメントをクロールし、[NotebookLM](https://noteb
 
 ## 主な機能
 
-- **クロール**: BFSアルゴリズムによるWebサイトのHTMLダウンロード（キャッシュによる効率的な追加クロール対応）
-- **変換**: HTMLからMarkdownへの変換（画像等の不要要素を除去）
+- **クロール**: BFSアルゴリズムによるWebサイトのHTMLダウンロード（並列フェッチ・レート制限・キャッシュ対応）
+- **変換**: HTMLからMarkdownへの変換（並列処理対応、画像等の不要要素を除去）
 - **結合**: 複数のMarkdownファイルを1つに結合（500,000語超で自動分割）
 - **パイプライン**: 上記3ステップを一括実行
 
@@ -21,6 +21,9 @@ uv sync
 
 ```bash
 uv run notebooklm-connector pipeline https://example.com/docs -o output/
+
+# 並列数を指定して実行
+uv run notebooklm-connector pipeline https://example.com/docs -o output/ --max-concurrency 3 --max-workers 4
 ```
 
 `output/html/`、`output/md/`、`output/combined.md` が生成されます。語数が500,000語を超える場合は `combined-001.md`、
@@ -56,7 +59,10 @@ uv run notebooklm-connector --report report.json pipeline https://example.com/do
 # 出力ディレクトリに既存HTMLがあればキャッシュとして再利用し、HTTPリクエストをスキップします
 uv run notebooklm-connector crawl https://example.com/docs -o html/ --max-pages 50 --delay 1.0
 
-# HTMLをMarkdownに変換
+# 並列クロール数を指定（デフォルト: 5）
+uv run notebooklm-connector crawl https://example.com/docs -o html/ --max-concurrency 3
+
+# HTMLをMarkdownに変換（--max-workers で並列ワーカー数を指定可能、デフォルト: CPUコア数）
 uv run notebooklm-connector convert html/ -o md/
 
 # ZIPファイルからも変換可能

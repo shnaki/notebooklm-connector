@@ -96,6 +96,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="リクエスト間隔 秒 (デフォルト: 1.0)",
     )
+    crawl_parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=5,
+        help="並列クロール数 (デフォルト: 5)",
+    )
 
     # --- convert ---
     convert_parser = subparsers.add_parser(
@@ -116,6 +122,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="入力を ZIP ファイルとして扱う",
+    )
+    convert_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="並列変換ワーカー数 (デフォルト: CPU コア数)",
     )
 
     # --- combine ---
@@ -156,6 +168,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="リクエスト間隔 秒 (デフォルト: 1.0)",
     )
+    pipeline_parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=5,
+        help="並列クロール数 (デフォルト: 5)",
+    )
+    pipeline_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="並列変換ワーカー数 (デフォルト: CPU コア数)",
+    )
 
     return parser
 
@@ -167,6 +191,7 @@ def _run_crawl(args: argparse.Namespace) -> StepResult:
         output_dir=args.output,
         max_pages=args.max_pages,
         delay_seconds=args.delay,
+        max_concurrency=args.max_concurrency,
     )
     start = time.monotonic()
     files = crawl(config)
@@ -180,9 +205,18 @@ def _run_convert(args: argparse.Namespace) -> StepResult:
     """convert サブコマンドを実行する。"""
     start = time.monotonic()
     if args.zip:
-        files = convert_zip(args.input, args.output)
+        config = ConvertConfig(
+            input_dir=Path("."),
+            output_dir=args.output,
+            max_workers=args.max_workers,
+        )
+        files = convert_zip(args.input, args.output, config=config)
     else:
-        config = ConvertConfig(input_dir=args.input, output_dir=args.output)
+        config = ConvertConfig(
+            input_dir=args.input,
+            output_dir=args.output,
+            max_workers=args.max_workers,
+        )
         files = convert_directory(config)
     elapsed = time.monotonic() - start
     result = _make_step_result("変換", files, elapsed, str(args.output))
@@ -218,6 +252,7 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
         output_dir=html_dir,
         max_pages=args.max_pages,
         delay_seconds=args.delay,
+        max_concurrency=args.max_concurrency,
     )
     start = time.monotonic()
     crawled = crawl(crawl_config)
@@ -228,7 +263,11 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
 
     # Step 2: Convert
     print("=== Step 2/3: 変換 ===")
-    convert_config = ConvertConfig(input_dir=html_dir, output_dir=md_dir)
+    convert_config = ConvertConfig(
+        input_dir=html_dir,
+        output_dir=md_dir,
+        max_workers=args.max_workers,
+    )
     start = time.monotonic()
     converted = convert_directory(convert_config)
     elapsed = time.monotonic() - start
