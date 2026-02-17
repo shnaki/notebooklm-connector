@@ -1,5 +1,6 @@
 """cli モジュールのテスト。"""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -119,3 +120,37 @@ def test_cli_convert_zip(tmp_path: Path) -> None:
 
     md_files = list(output_dir.glob("*.md"))
     assert len(md_files) == 1
+
+
+def test_cli_pipeline_with_report(tmp_path: Path) -> None:
+    """--report オプション付きパイプラインで JSON レポートが生成されること。"""
+    output_dir = tmp_path / "output"
+    report_path = tmp_path / "report.json"
+    mock_client = httpx.Client(transport=httpx.MockTransport(_mock_handler))
+
+    with patch(
+        "notebooklm_connector.crawler.httpx.Client",
+        return_value=mock_client,
+    ):
+        main(
+            [
+                "--report",
+                str(report_path),
+                "pipeline",
+                "https://example.com/docs/",
+                "-o",
+                str(output_dir),
+                "--max-pages",
+                "1",
+                "--delay",
+                "0",
+            ]
+        )
+
+    assert report_path.exists()
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert len(data["steps"]) == 3
+    assert data["steps"][0]["step_name"] == "クロール"
+    assert data["steps"][1]["step_name"] == "変換"
+    assert data["steps"][2]["step_name"] == "結合"
+    assert data["total_elapsed_seconds"] >= 0

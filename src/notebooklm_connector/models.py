@@ -53,3 +53,22 @@ class CombineConfig:
     output_file: Path
     separator: str = "\n\n---\n\n"
     add_source_header: bool = True
+
+
+@dataclass
+class StepResult:
+    """個別ステップの処理結果。"""
+
+    step_name: str
+    file_count: int
+    total_bytes: int
+    elapsed_seconds: float
+    output_path: str
+
+
+@dataclass
+class PipelineReport:
+    """パイプライン全体の処理レポート。"""
+
+    steps: list[StepResult]
+    total_elapsed_seconds: float

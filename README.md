@@ -28,6 +28,27 @@ uv run notebooklm-connector pipeline https://example.com/docs -o output/
 
 `--max-pages` に達した場合でも、再実行すればキャッシュ済みページをスキップして未取得のページから追加クロールを継続できます。
 
+### レポート出力
+
+`--report` オプションを指定すると、処理結果のサマリーを JSON ファイルに出力できます。
+
+```bash
+uv run notebooklm-connector --report report.json pipeline https://example.com/docs -o output/
+```
+
+コンソールには各ステップのサマリーと合計が表示されます:
+
+```
+=== Step 1/3: クロール ===
+クロール: 15 ファイル (2.3 MB), 45.2 秒 → output/html
+=== Step 2/3: 変換 ===
+変換: 15 ファイル (337.6 KB), 2.2 秒 → output/md
+=== Step 3/3: 結合 ===
+結合: 1 ファイル (291.8 KB), 0.3 秒 → output/combined.md
+=== 完了 ===
+合計: 47.7 秒, 3 ステップ
+```
+
 ### 個別実行
 
 ```bash
