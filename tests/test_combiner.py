@@ -118,3 +118,41 @@ def test_combine_warns_on_large_output(
         combine(config)
 
     assert any("500000" in r.message for r in caplog.records)
+
+
+def test_combine_recursive(tmp_path: Path) -> None:
+    """サブディレクトリ内の .md も結合されること。"""
+    input_dir = tmp_path / "md"
+    sub_dir = input_dir / "guide"
+    sub_dir.mkdir(parents=True)
+
+    (input_dir / "index.md").write_text("# Index\n", encoding="utf-8")
+    (sub_dir / "start.md").write_text("# Start\n", encoding="utf-8")
+
+    output_file = tmp_path / "combined.md"
+    config = CombineConfig(
+        input_dir=input_dir,
+        output_file=output_file,
+        add_source_header=False,
+    )
+    combine(config)
+
+    content = output_file.read_text(encoding="utf-8")
+    assert "# Index" in content
+    assert "# Start" in content
+
+
+def test_combine_source_header_relative_path(tmp_path: Path) -> None:
+    """ソースヘッダーに相対パスが含まれること。"""
+    input_dir = tmp_path / "md"
+    sub_dir = input_dir / "guide"
+    sub_dir.mkdir(parents=True)
+
+    (sub_dir / "start.md").write_text("# Start\n", encoding="utf-8")
+
+    output_file = tmp_path / "combined.md"
+    config = CombineConfig(input_dir=input_dir, output_file=output_file)
+    combine(config)
+
+    content = output_file.read_text(encoding="utf-8")
+    assert "<!-- Source: guide/start.md -->" in content

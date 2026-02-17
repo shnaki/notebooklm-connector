@@ -19,7 +19,10 @@ def combine(config: CombineConfig) -> Path:
     Returns:
         生成された結合ファイルのパス。
     """
-    md_files = sorted(config.input_dir.glob("*.md"))
+    md_files = sorted(
+        config.input_dir.rglob("*.md"),
+        key=lambda p: p.relative_to(config.input_dir),
+    )
 
     if not md_files:
         logger.warning("Markdown ファイルが見つかりません: %s", config.input_dir)
@@ -31,7 +34,8 @@ def combine(config: CombineConfig) -> Path:
     for md_file in md_files:
         content = md_file.read_text(encoding="utf-8").strip()
         if config.add_source_header:
-            header = f"<!-- Source: {md_file.name} -->"
+            relative = md_file.relative_to(config.input_dir)
+            header = f"<!-- Source: {relative.as_posix()} -->"
             sections.append(f"{header}\n\n{content}")
         else:
             sections.append(content)
