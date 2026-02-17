@@ -60,7 +60,9 @@ def _build_parser() -> argparse.ArgumentParser:
     convert_parser = subparsers.add_parser(
         "convert", help="HTML を Markdown に変換する"
     )
-    convert_parser.add_argument("input", type=Path, help="HTML 入力ディレクトリ")
+    convert_parser.add_argument(
+        "input", type=Path, help="HTML 入力ディレクトリまたは ZIP ファイルのパス"
+    )
     convert_parser.add_argument(
         "-o",
         "--output",
@@ -70,9 +72,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     convert_parser.add_argument(
         "--zip",
-        type=Path,
-        default=None,
-        help="ZIP ファイルから変換する場合のパス",
+        action="store_true",
+        default=False,
+        help="入力を ZIP ファイルとして扱う",
     )
 
     # --- combine ---
@@ -131,9 +133,8 @@ def _run_crawl(args: argparse.Namespace) -> None:
 
 def _run_convert(args: argparse.Namespace) -> None:
     """convert サブコマンドを実行する。"""
-    if args.zip is not None:
-        zip_path: Path = args.zip
-        files = convert_zip(zip_path, args.output)
+    if args.zip:
+        files = convert_zip(args.input, args.output)
     else:
         config = ConvertConfig(input_dir=args.input, output_dir=args.output)
         files = convert_directory(config)
