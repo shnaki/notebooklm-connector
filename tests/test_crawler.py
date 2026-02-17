@@ -280,6 +280,44 @@ def test_crawl_uses_cache(tmp_path: Path) -> None:
     assert result[0].read_text(encoding="utf-8") == cached_html
 
 
+def test_crawl_concurrent_multiple_pages(tmp_path: Path) -> None:
+    """max_concurrency=3 で全ページが正しく取得されること。"""
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        max_pages=10,
+        delay_seconds=0,
+        max_concurrency=3,
+    )
+
+    client = _make_mock_client()
+    result = crawl(config, client=client)
+
+    assert len(result) == 3
+    assert all(f.exists() for f in result)
+    filenames = {f.name for f in result}
+    assert "index.html" in filenames
+    assert "docs_page1.html" in filenames
+    assert "docs_page2.html" in filenames
+
+
+def test_crawl_max_concurrency_one(tmp_path: Path) -> None:
+    """max_concurrency=1 でシーケンシャルと同等の結果になること。"""
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        max_pages=10,
+        delay_seconds=0,
+        max_concurrency=1,
+    )
+
+    client = _make_mock_client()
+    result = crawl(config, client=client)
+
+    assert len(result) == 3
+    assert all(f.exists() for f in result)
+
+
 def test_crawl_cache_discovers_links(tmp_path: Path) -> None:
     """キャッシュされたページからもリンクが探索され新しいページがクロールされること。"""
     output_dir = tmp_path / "html"

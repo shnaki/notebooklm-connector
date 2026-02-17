@@ -5,7 +5,9 @@ BFS でリンクを辿り、HTML ファイルをローカルに保存する。
 
 import logging
 import re
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -100,6 +102,65 @@ def _discover_links(
     return links
 
 
+def _fetch_and_save(
+    url: str,
+    config: CrawlConfig,
+    url_prefix: str,
+    client: httpx.Client,
+) -> tuple[Path | None, list[str]]:
+    """単一 URL のフェッチ・保存・リンク探索をワーカースレッドで実行する。
+
+    キャッシュヒット時は sleep しない（HTTP リクエストなし）。
+    フェッチ後に delay_seconds だけ sleep してレート制限する。
+
+    Args:
+        url: 取得する URL。
+        config: クロール設定。
+        url_prefix: クロール範囲の URL prefix。
+        client: httpx.Client インスタンス。
+
+    Returns:
+        (保存されたファイルパス or None, 発見されたリンクのリスト)。
+    """
+    filename = _url_to_filename(url, config.start_url)
+    filepath = config.output_dir / filename
+
+    # キャッシュチェック: ファイルが存在すれば HTTP リクエストをスキップ
+    if filepath.exists():
+        logger.info("キャッシュ使用: %s", url)
+        html = filepath.read_text(encoding="utf-8")
+        new_links = _discover_links(html, url, url_prefix)
+        return filepath, new_links
+
+    logger.info("クロール中: %s", url)
+
+    try:
+        response = client.get(url)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        logger.exception("取得失敗: %s", url)
+        return None, []
+
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type:
+        logger.debug("スキップ (非 HTML): %s", url)
+        return None, []
+
+    html = response.text
+
+    # ファイル保存
+    filepath.write_text(html, encoding="utf-8")
+
+    # リンク探索
+    new_links = _discover_links(html, url, url_prefix)
+
+    # レート制限（キャッシュヒットではないので sleep）
+    if config.delay_seconds > 0:
+        time.sleep(config.delay_seconds)
+
+    return filepath, new_links
+
+
 def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]:
     """BFS で Web サイトをクロールし HTML ファイルを保存する。
 
@@ -116,8 +177,9 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
     logger.info("クロール開始: %s (prefix: %s)", config.start_url, url_prefix)
 
     visited: set[str] = set()
-    queue: list[str] = [config.start_url]
+    pending_urls: list[str] = [config.start_url]
     saved_files: list[Path] = []
+    lock = threading.Lock()
 
     should_close = client is None
     if client is None:
@@ -130,67 +192,34 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
         )
 
     try:
-        while queue and len(visited) < config.max_pages:
-            url = queue.pop(0)
+        with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
+            futures: set[Future[tuple[Path | None, list[str]]]] = set()
 
-            if url in visited:
-                continue
-            visited.add(url)
+            def _submit_pending() -> None:
+                """pending_urls から未訪問 URL を submit する。"""
+                while pending_urls and len(visited) < config.max_pages:
+                    url = pending_urls.pop(0)
+                    if url in visited:
+                        continue
+                    visited.add(url)
+                    future = executor.submit(
+                        _fetch_and_save, url, config, url_prefix, client
+                    )
+                    futures.add(future)
 
-            # ファイル名を先に計算
-            filename = _url_to_filename(url, config.start_url)
-            filepath = config.output_dir / filename
+            _submit_pending()
 
-            # キャッシュチェック: ファイルが存在すれば HTTP リクエストをスキップ
-            if filepath.exists():
-                logger.info(
-                    "[%d/%d] キャッシュ使用: %s",
-                    len(visited),
-                    config.max_pages,
-                    url,
-                )
-                html = filepath.read_text(encoding="utf-8")
-                saved_files.append(filepath)
-                new_links = _discover_links(html, url, url_prefix)
-                for link in new_links:
-                    if link not in visited:
-                        queue.append(link)
-                continue
-
-            logger.info(
-                "[%d/%d] クロール中: %s",
-                len(visited),
-                config.max_pages,
-                url,
-            )
-
-            try:
-                response = client.get(url)
-                response.raise_for_status()
-            except httpx.HTTPError:
-                logger.exception("取得失敗: %s", url)
-                continue
-
-            content_type = response.headers.get("content-type", "")
-            if "text/html" not in content_type:
-                logger.debug("スキップ (非 HTML): %s", url)
-                continue
-
-            html = response.text
-
-            # ファイル保存
-            filepath.write_text(html, encoding="utf-8")
-            saved_files.append(filepath)
-
-            # リンク探索
-            new_links = _discover_links(html, url, url_prefix)
-            for link in new_links:
-                if link not in visited:
-                    queue.append(link)
-
-            # レート制限
-            if queue and config.delay_seconds > 0:
-                time.sleep(config.delay_seconds)
+            while futures:
+                done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done:
+                    filepath, new_links = future.result()
+                    with lock:
+                        if filepath is not None:
+                            saved_files.append(filepath)
+                        for link in new_links:
+                            if link not in visited:
+                                pending_urls.append(link)
+                    _submit_pending()
     finally:
         if should_close:
             client.close()

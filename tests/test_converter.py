@@ -147,6 +147,48 @@ def test_convert_zip_skips_macosx(tmp_path: Path) -> None:
     assert "Ghost" not in result[0].read_text(encoding="utf-8")
 
 
+def test_convert_directory_parallel(tmp_path: Path) -> None:
+    """max_workers=2 で複数ファイルが正しく変換されること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    for i in range(4):
+        (input_dir / f"page{i}.html").write_text(
+            f"<main><h1>Page {i}</h1></main>", encoding="utf-8"
+        )
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir, max_workers=2)
+    result = convert_directory(config)
+
+    assert len(result) == 4
+    for i in range(4):
+        md_path = output_dir / f"page{i}.md"
+        assert md_path.exists()
+        assert f"Page {i}" in md_path.read_text(encoding="utf-8")
+
+
+def test_convert_directory_single_worker(tmp_path: Path) -> None:
+    """max_workers=1 でもシーケンシャルと同等の結果になること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    (input_dir / "page1.html").write_text(
+        "<main><h1>Page 1</h1></main>", encoding="utf-8"
+    )
+    (input_dir / "page2.html").write_text(
+        "<main><h1>Page 2</h1></main>", encoding="utf-8"
+    )
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir, max_workers=1)
+    result = convert_directory(config)
+
+    assert len(result) == 2
+    assert (output_dir / "page1.md").exists()
+    assert (output_dir / "page2.md").exists()
+
+
 def test_convert_custom_strip_classes() -> None:
     """カスタム strip_classes が適用されること。"""
     html = '<main><div class="my-ad">Ad</div><p>Content</p></main>'

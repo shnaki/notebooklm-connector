@@ -7,6 +7,7 @@ ZIP アーカイブからの変換もサポート。
 import logging
 import re
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Tag
@@ -112,6 +113,27 @@ def convert_html_to_markdown(
     return _normalize_whitespace(markdown)
 
 
+def _convert_single_file(html_file: Path, config: ConvertConfig) -> Path:
+    """単一の HTML ファイルを Markdown に変換する。
+
+    Args:
+        html_file: 入力 HTML ファイルのパス。
+        config: 変換設定。
+
+    Returns:
+        生成された Markdown ファイルのパス。
+    """
+    relative = html_file.relative_to(config.input_dir)
+    logger.info("変換中: %s", relative)
+    html_content = html_file.read_text(encoding="utf-8")
+    markdown = convert_html_to_markdown(html_content, config)
+
+    output_path = config.output_dir / relative.with_suffix(".md")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(markdown, encoding="utf-8")
+    return output_path
+
+
 def convert_directory(config: ConvertConfig) -> list[Path]:
     """ディレクトリ内の全 HTML ファイルを Markdown に変換する。
 
@@ -130,20 +152,32 @@ def convert_directory(config: ConvertConfig) -> list[Path]:
         logger.warning("HTML ファイルが見つかりません: %s", config.input_dir)
         return []
 
-    output_paths: list[Path] = []
-    for html_file in html_files:
-        relative = html_file.relative_to(config.input_dir)
-        logger.info("変換中: %s", relative)
-        html_content = html_file.read_text(encoding="utf-8")
-        markdown = convert_html_to_markdown(html_content, config)
-
-        output_path = config.output_dir / relative.with_suffix(".md")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(markdown, encoding="utf-8")
-        output_paths.append(output_path)
+    with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+        output_paths = list(
+            executor.map(_convert_single_file, html_files, [config] * len(html_files))
+        )
 
     logger.info("%d ファイルを変換しました", len(output_paths))
     return output_paths
+
+
+def _convert_html_content(args: tuple[str, str, Path, ConvertConfig]) -> Path:
+    """HTML コンテンツ文字列を Markdown に変換してファイルに書き出す。
+
+    Args:
+        args: (エントリ名, HTML コンテンツ, 出力ディレクトリ, 変換設定) のタプル。
+
+    Returns:
+        生成された Markdown ファイルのパス。
+    """
+    name, html_content, output_dir, config = args
+    logger.info("ZIP から変換中: %s", name)
+    markdown = convert_html_to_markdown(html_content, config)
+
+    output_path = output_dir / Path(name).with_suffix(".md")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(markdown, encoding="utf-8")
+    return output_path
 
 
 def convert_zip(
@@ -166,23 +200,21 @@ def convert_zip(
     if config is None:
         config = ConvertConfig(input_dir=Path("."), output_dir=output_dir)
 
-    output_paths: list[Path] = []
+    # メインスレッドで ZIP から一括読み込み
+    entries: list[tuple[str, str, Path, ConvertConfig]] = []
     with zipfile.ZipFile(zip_path, "r") as zf:
         html_names = sorted(
             name
             for name in zf.namelist()
             if name.endswith((".html", ".htm")) and not name.startswith("__MACOSX")
         )
-
         for name in html_names:
-            logger.info("ZIP から変換中: %s", name)
             html_content = zf.read(name).decode("utf-8")
-            markdown = convert_html_to_markdown(html_content, config)
+            entries.append((name, html_content, output_dir, config))
 
-            output_path = output_dir / Path(name).with_suffix(".md")
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(markdown, encoding="utf-8")
-            output_paths.append(output_path)
+    # 変換を並列実行
+    with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+        output_paths = list(executor.map(_convert_html_content, entries))
 
     logger.info("ZIP から %d ファイルを変換しました", len(output_paths))
     return output_paths
