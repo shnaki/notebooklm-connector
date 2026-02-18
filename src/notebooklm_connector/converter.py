@@ -169,6 +169,51 @@ def convert_directory(config: ConvertConfig) -> tuple[list[Path], list[str]]:
     return output_paths, failed_files
 
 
+def convert_failed_files(
+    file_paths: list[str],
+    config: ConvertConfig,
+) -> tuple[list[Path], list[str]]:
+    """指定したファイルパスのみを Markdown に変換する。
+
+    report.json の convert_failures に記録された絶対パス (posix 形式) を
+    受け取り、再変換する。存在しないファイルは失敗リストに追加してスキップする。
+
+    Args:
+        file_paths: 変換対象の HTML ファイルパス (絶対パス posix 形式) のリスト。
+        config: 変換設定。input_dir が基底ディレクトリとして使用される。
+
+    Returns:
+        (生成された Markdown ファイルのパスリスト, 失敗したファイルパスのリスト)。
+    """
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    html_files: list[Path] = []
+    pre_failed: list[str] = []
+    for posix_path in file_paths:
+        p = Path(posix_path)
+        if not p.exists():
+            logger.warning("ファイルが存在しません: %s", posix_path)
+            pre_failed.append(posix_path)
+        else:
+            html_files.append(p)
+
+    if not html_files:
+        return [], pre_failed
+
+    with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+        results = list(
+            executor.map(_convert_single_file, html_files, [config] * len(html_files))
+        )
+
+    output_paths = [r for r in results if r is not None]
+    convert_failed = [
+        html_files[i].as_posix() for i, r in enumerate(results) if r is None
+    ]
+
+    logger.info("%d ファイルを再変換しました", len(output_paths))
+    return output_paths, pre_failed + convert_failed
+
+
 def _convert_html_content(args: tuple[str, str, Path, ConvertConfig]) -> Path | None:
     """HTML コンテンツ文字列を Markdown に変換してファイルに書き出す。
 

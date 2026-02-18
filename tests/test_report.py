@@ -3,11 +3,14 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from notebooklm_connector.models import PipelineReport, StepResult
 from notebooklm_connector.report import (
     _format_bytes,
     format_pipeline_summary,
     format_step_summary,
+    read_report,
     write_report,
 )
 
@@ -93,6 +96,67 @@ def test_write_report(tmp_path: Path) -> None:
     assert data["steps"][0]["skipped_count"] == 0
     assert data["crawl_failures"] == []
     assert data["convert_failures"] == []
+
+
+def test_read_report_roundtrip(tmp_path: Path) -> None:
+    """write_report → read_report でラウンドトリップ検証。"""
+    steps = [
+        StepResult("クロール", 10, 1024, 5.0, "out/html"),
+        StepResult("変換", 10, 512, 1.0, "out/md"),
+    ]
+    original = PipelineReport(steps=steps, total_elapsed_seconds=6.0)
+    report_path = tmp_path / "report.json"
+
+    write_report(original, report_path)
+    restored = read_report(report_path)
+
+    assert restored.total_elapsed_seconds == original.total_elapsed_seconds
+    assert len(restored.steps) == len(original.steps)
+    assert restored.steps[0].step_name == original.steps[0].step_name
+    assert restored.steps[0].file_count == original.steps[0].file_count
+    assert restored.crawl_failures == []
+    assert restored.convert_failures == []
+
+
+def test_read_report_with_failures(tmp_path: Path) -> None:
+    """crawl_failures / convert_failures が正しく復元されること。"""
+    steps = [StepResult("クロール", 1, 1024, 5.0, "out/html")]
+    original = PipelineReport(
+        steps=steps,
+        total_elapsed_seconds=5.0,
+        crawl_failures=["https://example.com/missing"],
+        convert_failures=["output/html/page1.html"],
+    )
+    report_path = tmp_path / "report.json"
+
+    write_report(original, report_path)
+    restored = read_report(report_path)
+
+    assert restored.crawl_failures == ["https://example.com/missing"]
+    assert restored.convert_failures == ["output/html/page1.html"]
+
+
+def test_read_report_file_not_found(tmp_path: Path) -> None:
+    """存在しないファイルで OSError が発生すること。"""
+    with pytest.raises(OSError):
+        read_report(tmp_path / "nonexistent.json")
+
+
+def test_read_report_invalid_json(tmp_path: Path) -> None:
+    """不正 JSON で json.JSONDecodeError が発生すること。"""
+    report_path = tmp_path / "report.json"
+    report_path.write_text("not valid json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        read_report(report_path)
+
+
+def test_read_report_missing_required_field(tmp_path: Path) -> None:
+    """必須フィールドが欠落している場合に KeyError が発生すること。"""
+    report_path = tmp_path / "report.json"
+    data = {"steps": []}  # total_elapsed_seconds が欠落
+    report_path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(KeyError):
+        read_report(report_path)
 
 
 def test_write_report_with_failures(tmp_path: Path) -> None:

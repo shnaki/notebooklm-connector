@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from notebooklm_connector.converter import (
     convert_directory,
+    convert_failed_files,
     convert_html_to_markdown,
     convert_zip,
 )
@@ -273,6 +274,62 @@ def test_convert_zip_htm_extension(tmp_path: Path) -> None:
     assert len(result) == 1
     assert (output_dir / "page.md").exists()
     assert "HTM in ZIP" in result[0].read_text(encoding="utf-8")
+
+
+def test_convert_failed_files_converts_specified(tmp_path: Path) -> None:
+    """指定ファイルのみ変換されること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    (input_dir / "page1.html").write_text(
+        "<main><h1>Page 1</h1></main>", encoding="utf-8"
+    )
+    (input_dir / "page2.html").write_text(
+        "<main><h1>Page 2</h1></main>", encoding="utf-8"
+    )
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
+    file_paths = [(input_dir / "page1.html").as_posix()]
+    result, failed = convert_failed_files(file_paths, config)
+
+    assert len(result) == 1
+    assert failed == []
+    assert (output_dir / "page1.md").exists()
+    assert not (output_dir / "page2.md").exists()
+
+
+def test_convert_failed_files_skips_missing(tmp_path: Path) -> None:
+    """存在しないファイルが failed に含まれること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    (input_dir / "page1.html").write_text(
+        "<main><h1>Page 1</h1></main>", encoding="utf-8"
+    )
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
+    missing_path = (input_dir / "missing.html").as_posix()
+    existing_path = (input_dir / "page1.html").as_posix()
+    result, failed = convert_failed_files([missing_path, existing_path], config)
+
+    assert len(result) == 1
+    assert missing_path in failed
+    assert (output_dir / "page1.md").exists()
+
+
+def test_convert_failed_files_empty_list(tmp_path: Path) -> None:
+    """空リストで空結果が返ること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
+    result, failed = convert_failed_files([], config)
+
+    assert result == []
+    assert failed == []
 
 
 def test_convert_directory_failure_collected(tmp_path: Path) -> None:

@@ -7,7 +7,13 @@ import logging
 import re
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -240,4 +246,66 @@ def crawl(
             client.close()
 
     logger.info("クロール完了: %d ページを保存しました", len(saved_files))
+    return saved_files, skipped_count, downloaded_count, failed_urls
+
+
+def crawl_urls(
+    urls: list[str],
+    config: CrawlConfig,
+    client: httpx.Client | None = None,
+) -> tuple[list[Path], int, int, list[str]]:
+    """指定した URL リストのみをフェッチして HTML として保存する。
+
+    BFS によるリンク探索は行わない。既存ファイルがある URL はキャッシュとして
+    スキップされる。失敗した URL の再クロールに使用する。
+
+    Args:
+        urls: フェッチする URL のリスト。
+        config: クロール設定。output_dir と start_url が使用される。
+        client: httpx.Client インスタンス。None の場合は新規作成。
+
+    Returns:
+        (保存された HTML ファイルのパスリスト, キャッシュヒット数,
+        ダウンロード数, 失敗URL リスト)。
+    """
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    url_prefix = config.url_prefix or _derive_url_prefix(config.start_url)
+
+    saved_files: list[Path] = []
+    skipped_count = 0
+    downloaded_count = 0
+    failed_urls: list[str] = []
+    lock = threading.Lock()
+
+    should_close = client is None
+    if client is None:
+        client = httpx.Client(
+            follow_redirects=True,
+            timeout=30.0,
+            headers={
+                "User-Agent": ("Mozilla/5.0 (compatible; NotebookLM-Connector/0.1)")
+            },
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
+            future_to_url = {
+                executor.submit(_fetch_and_save, url, config, url_prefix, client): url
+                for url in urls
+            }
+            for future in as_completed(future_to_url):
+                filepath, _new_links, was_cached, failed_url = future.result()
+                with lock:
+                    if filepath is not None:
+                        saved_files.append(filepath)
+                    if was_cached:
+                        skipped_count += 1
+                    elif failed_url is not None:
+                        failed_urls.append(failed_url)
+                    elif filepath is not None:
+                        downloaded_count += 1
+    finally:
+        if should_close:
+            client.close()
+
     return saved_files, skipped_count, downloaded_count, failed_urls
