@@ -60,6 +60,31 @@ def format_pipeline_summary(report: PipelineReport) -> str:
     return "\n".join(lines)
 
 
+def read_report(path: Path) -> PipelineReport:
+    """JSON ファイルからレポートを読み込む。
+
+    Args:
+        path: 読み込むレポートファイルのパス。
+
+    Returns:
+        PipelineReport インスタンス。
+
+    Raises:
+        OSError: ファイルの読み取りに失敗した場合。
+        json.JSONDecodeError: JSON のパースに失敗した場合。
+        KeyError: 必須フィールドが存在しない場合。
+    """
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)
+    steps = [StepResult(**s) for s in data["steps"]]
+    return PipelineReport(
+        steps=steps,
+        total_elapsed_seconds=data["total_elapsed_seconds"],
+        crawl_failures=data.get("crawl_failures", []),
+        convert_failures=data.get("convert_failures", []),
+    )
+
+
 def write_report(report: PipelineReport, path: Path) -> None:
     """レポートをJSONファイルに出力する。
 

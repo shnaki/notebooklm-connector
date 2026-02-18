@@ -9,6 +9,7 @@ from notebooklm_connector.crawler import (
     _discover_links,
     _url_to_filename,
     crawl,
+    crawl_urls,
 )
 from notebooklm_connector.models import CrawlConfig
 
@@ -361,6 +362,104 @@ def test_crawl_tracks_downloaded_count(tmp_path: Path) -> None:
 
     assert downloaded == len(files)
     assert skipped == 0
+    assert failed == []
+
+
+def test_crawl_urls_fetches_specified_urls(tmp_path: Path) -> None:
+    """指定 URL のみフェッチされること。"""
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        delay_seconds=0,
+    )
+
+    client = _make_mock_client()
+    urls = ["https://example.com/docs/page1", "https://example.com/docs/page2"]
+    files, skipped, downloaded, failed = crawl_urls(urls, config, client=client)
+
+    assert len(files) == 2
+    assert all(f.exists() for f in files)
+    filenames = {f.name for f in files}
+    assert "docs_page1.html" in filenames
+    assert "docs_page2.html" in filenames
+
+
+def test_crawl_urls_does_not_follow_links(tmp_path: Path) -> None:
+    """BFS をしないこと（index のみ指定 → page1/page2 は取得されない）。"""
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        delay_seconds=0,
+    )
+
+    client = _make_mock_client()
+    files, skipped, downloaded, failed = crawl_urls(
+        ["https://example.com/docs/"], config, client=client
+    )
+
+    assert len(files) == 1
+    assert files[0].name == "index.html"
+
+
+def test_crawl_urls_empty_list(tmp_path: Path) -> None:
+    """空リストで空結果が返ること。"""
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        delay_seconds=0,
+    )
+
+    client = _make_mock_client()
+    files, skipped, downloaded, failed = crawl_urls([], config, client=client)
+
+    assert files == []
+    assert skipped == 0
+    assert downloaded == 0
+    assert failed == []
+
+
+def test_crawl_urls_404_reported_as_failure(tmp_path: Path) -> None:
+    """404 URL が failed に含まれること。"""
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        delay_seconds=0,
+    )
+
+    client = _make_mock_client()
+    files, skipped, downloaded, failed = crawl_urls(
+        ["https://example.com/docs/missing"], config, client=client
+    )
+
+    assert failed == ["https://example.com/docs/missing"]
+    assert files == []
+
+
+def test_crawl_urls_uses_cache(tmp_path: Path) -> None:
+    """キャッシュ済みファイルがスキップされること。"""
+    output_dir = tmp_path / "html"
+    output_dir.mkdir()
+    (output_dir / "index.html").write_text(
+        "<html><body>Cached</body></html>", encoding="utf-8"
+    )
+
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=output_dir,
+        delay_seconds=0,
+    )
+
+    def fail_handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"HTTP リクエストが発生すべきでない: {request.url}")
+
+    client = httpx.Client(transport=httpx.MockTransport(fail_handler))
+    files, skipped, downloaded, failed = crawl_urls(
+        ["https://example.com/docs/"], config, client=client
+    )
+
+    assert len(files) == 1
+    assert skipped == 1
+    assert downloaded == 0
     assert failed == []
 
 

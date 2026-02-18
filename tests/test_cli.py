@@ -7,6 +7,8 @@ from unittest.mock import patch
 import httpx
 
 from notebooklm_connector.cli import main
+from notebooklm_connector.models import PipelineReport, StepResult
+from notebooklm_connector.report import write_report
 
 
 def _mock_handler(request: httpx.Request) -> httpx.Response:
@@ -190,6 +192,142 @@ def test_cli_crawl_with_report(tmp_path: Path) -> None:
     data = json.loads(report_path.read_text(encoding="utf-8"))
     assert "crawl_failures" in data
     assert data["crawl_failures"] == []
+
+
+def test_cli_crawl_retry_from_report(tmp_path: Path) -> None:
+    """crawl --retry-from-report で失敗 URL が再クロールされること。"""
+    prev_report = PipelineReport(
+        steps=[StepResult("クロール", 1, 1024, 5.0, "out/html")],
+        total_elapsed_seconds=5.0,
+        crawl_failures=["https://example.com/docs/"],
+    )
+    report_path = tmp_path / "report.json"
+    write_report(prev_report, report_path)
+
+    output_dir = tmp_path / "html"
+    mock_client = httpx.Client(transport=httpx.MockTransport(_mock_handler))
+
+    with patch("notebooklm_connector.crawler.httpx.Client", return_value=mock_client):
+        main(
+            [
+                "crawl",
+                "https://example.com/docs/",
+                "-o",
+                str(output_dir),
+                "--delay",
+                "0",
+                "--retry-from-report",
+                str(report_path),
+            ]
+        )
+
+    html_files = list(output_dir.glob("*.html"))
+    assert len(html_files) >= 1
+
+
+def test_cli_convert_retry_from_report(tmp_path: Path) -> None:
+    """convert --retry-from-report で失敗ファイルが再変換されること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+
+    html_file = input_dir / "page.html"
+    html_file.write_text("<main><h1>Retry Page</h1></main>", encoding="utf-8")
+
+    prev_report = PipelineReport(
+        steps=[StepResult("変換", 0, 0, 1.0, "out/md")],
+        total_elapsed_seconds=1.0,
+        convert_failures=[html_file.as_posix()],
+    )
+    report_path = tmp_path / "report.json"
+    write_report(prev_report, report_path)
+
+    main(
+        [
+            "convert",
+            str(input_dir),
+            "-o",
+            str(output_dir),
+            "--retry-from-report",
+            str(report_path),
+        ]
+    )
+
+    md_files = list(output_dir.glob("*.md"))
+    assert len(md_files) == 1
+    assert "Retry Page" in md_files[0].read_text(encoding="utf-8")
+
+
+def test_cli_pipeline_retry_from_report(tmp_path: Path) -> None:
+    """pipeline --retry-from-report で失敗分が再実行されること。"""
+    base_dir = tmp_path / "output"
+    html_dir = base_dir / "html"
+    md_dir = base_dir / "md"
+    html_dir.mkdir(parents=True)
+    md_dir.mkdir(parents=True)
+
+    html_file = html_dir / "page.html"
+    html_file.write_text("<main><h1>Retry</h1></main>", encoding="utf-8")
+
+    prev_report = PipelineReport(
+        steps=[
+            StepResult("クロール", 1, 1024, 5.0, str(html_dir)),
+            StepResult("変換", 0, 0, 1.0, str(md_dir)),
+        ],
+        total_elapsed_seconds=6.0,
+        crawl_failures=[],
+        convert_failures=[html_file.as_posix()],
+    )
+    report_path = tmp_path / "report.json"
+    write_report(prev_report, report_path)
+
+    mock_client = httpx.Client(transport=httpx.MockTransport(_mock_handler))
+
+    with patch("notebooklm_connector.crawler.httpx.Client", return_value=mock_client):
+        main(
+            [
+                "pipeline",
+                "https://example.com/docs/",
+                "-o",
+                str(base_dir),
+                "--delay",
+                "0",
+                "--retry-from-report",
+                str(report_path),
+            ]
+        )
+
+    assert (base_dir / "combined.md").exists()
+    combined = (base_dir / "combined.md").read_text(encoding="utf-8")
+    assert "Retry" in combined
+
+
+def test_cli_crawl_retry_empty_failures(tmp_path: Path) -> None:
+    """crawl_failures が空のレポートで正常終了すること。"""
+    prev_report = PipelineReport(
+        steps=[StepResult("クロール", 1, 1024, 5.0, "out/html")],
+        total_elapsed_seconds=5.0,
+        crawl_failures=[],
+    )
+    report_path = tmp_path / "report.json"
+    write_report(prev_report, report_path)
+
+    output_dir = tmp_path / "html"
+    main(
+        [
+            "crawl",
+            "https://example.com/docs/",
+            "-o",
+            str(output_dir),
+            "--delay",
+            "0",
+            "--retry-from-report",
+            str(report_path),
+        ]
+    )
+
+    html_files = list(output_dir.glob("*.html")) if output_dir.exists() else []
+    assert html_files == []
 
 
 def test_cli_convert_with_report(tmp_path: Path) -> None:
