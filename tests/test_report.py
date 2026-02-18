@@ -189,3 +189,145 @@ def test_write_report_with_failures(tmp_path: Path) -> None:
     assert data["steps"][0]["skipped_count"] == 0
     assert data["steps"][0]["downloaded_count"] == 1
     assert data["steps"][0]["failure_count"] == 1
+
+
+def test_write_report_with_command(tmp_path: Path) -> None:
+    """command フィールドが正しくシリアライズされること。"""
+    steps = [StepResult("クロール", 1, 1024, 5.0, "out/html")]
+    report = PipelineReport(
+        steps=steps,
+        total_elapsed_seconds=5.0,
+        command=["notebooklm-connector", "crawl", "https://example.com/", "-o", "out"],
+    )
+    report_path = tmp_path / "report.json"
+
+    write_report(report, report_path)
+
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert data["command"] == [
+        "notebooklm-connector",
+        "crawl",
+        "https://example.com/",
+        "-o",
+        "out",
+    ]
+
+
+def test_read_report_with_command(tmp_path: Path) -> None:
+    """command フィールドが正しく復元されること。"""
+    steps = [StepResult("クロール", 1, 1024, 5.0, "out/html")]
+    original = PipelineReport(
+        steps=steps,
+        total_elapsed_seconds=5.0,
+        command=[
+            "notebooklm-connector",
+            "pipeline",
+            "https://example.com/",
+            "-o",
+            "out",
+        ],
+    )
+    report_path = tmp_path / "report.json"
+
+    write_report(original, report_path)
+    restored = read_report(report_path)
+
+    assert restored.command == original.command
+
+
+def test_read_report_command_defaults_empty(tmp_path: Path) -> None:
+    """旧フォーマット（command なし）でも読み込めること。"""
+    data = {
+        "steps": [
+            {
+                "step_name": "クロール",
+                "file_count": 1,
+                "total_bytes": 1024,
+                "elapsed_seconds": 5.0,
+                "output_path": "out/html",
+            }
+        ],
+        "total_elapsed_seconds": 5.0,
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(data), encoding="utf-8")
+
+    restored = read_report(report_path)
+
+    assert restored.command == []
+
+
+def test_write_report_with_output_word_counts(tmp_path: Path) -> None:
+    """output_word_counts が正しくシリアライズされること。"""
+    steps = [
+        StepResult(
+            "結合",
+            2,
+            1024,
+            0.5,
+            "out/combined.md",
+            output_word_counts={
+                "out/combined-001.md": 498000,
+                "out/combined-002.md": 321000,
+            },
+        ),
+    ]
+    report = PipelineReport(steps=steps, total_elapsed_seconds=0.5)
+    report_path = tmp_path / "report.json"
+
+    write_report(report, report_path)
+
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert data["steps"][0]["output_word_counts"] == {
+        "out/combined-001.md": 498000,
+        "out/combined-002.md": 321000,
+    }
+
+
+def test_read_report_with_output_word_counts(tmp_path: Path) -> None:
+    """output_word_counts が正しく復元されること。"""
+    steps = [
+        StepResult(
+            "結合",
+            2,
+            1024,
+            0.5,
+            "out/combined.md",
+            output_word_counts={
+                "out/combined-001.md": 498000,
+                "out/combined-002.md": 321000,
+            },
+        ),
+    ]
+    original = PipelineReport(steps=steps, total_elapsed_seconds=0.5)
+    report_path = tmp_path / "report.json"
+
+    write_report(original, report_path)
+    restored = read_report(report_path)
+
+    assert restored.steps[0].output_word_counts == {
+        "out/combined-001.md": 498000,
+        "out/combined-002.md": 321000,
+    }
+
+
+def test_read_report_output_word_counts_defaults_empty(tmp_path: Path) -> None:
+    """旧フォーマット（output_word_counts なし）でも読み込めること。"""
+    data = {
+        "steps": [
+            {
+                "step_name": "結合",
+                "file_count": 1,
+                "total_bytes": 1024,
+                "elapsed_seconds": 0.5,
+                "output_path": "out/combined.md",
+            }
+        ],
+        "total_elapsed_seconds": 0.5,
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(data), encoding="utf-8")
+
+    restored = read_report(report_path)
+
+    assert restored.steps[0].output_word_counts == {}

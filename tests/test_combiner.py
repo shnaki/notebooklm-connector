@@ -18,10 +18,12 @@ def test_combine_merges_files(tmp_path: Path) -> None:
 
     output_file = tmp_path / "output" / "combined.md"
     config = CombineConfig(input_dir=input_dir, output_file=output_file)
-    result = combine(config)
+    files, word_counts = combine(config)
 
-    assert result == [output_file]
+    assert files == [output_file]
     assert output_file.exists()
+    assert output_file.as_posix() in word_counts
+    assert word_counts[output_file.as_posix()] > 0
 
     content = output_file.read_text(encoding="utf-8")
     # a_page が先に来ること
@@ -89,10 +91,11 @@ def test_combine_empty_directory(tmp_path: Path) -> None:
 
     output_file = tmp_path / "combined.md"
     config = CombineConfig(input_dir=input_dir, output_file=output_file)
-    result = combine(config)
+    files, word_counts = combine(config)
 
-    assert result == [output_file]
+    assert files == [output_file]
     assert output_file.read_text(encoding="utf-8") == ""
+    assert word_counts == {output_file.as_posix(): 0}
 
 
 def test_combine_warns_on_large_output(
@@ -115,10 +118,11 @@ def test_combine_warns_on_large_output(
     )
 
     with caplog.at_level(logging.INFO):
-        result = combine(config)
+        files, word_counts = combine(config)
 
-    assert len(result) > 1
+    assert len(files) > 1
     assert any("分割" in r.message for r in caplog.records)
+    assert len(word_counts) == len(files)
 
 
 def test_combine_recursive(tmp_path: Path) -> None:
@@ -174,12 +178,14 @@ def test_combine_splits_large_output(tmp_path: Path) -> None:
         output_file=output_file,
         add_source_header=False,
     )
-    result = combine(config)
+    files, word_counts = combine(config)
 
-    assert len(result) == 2
-    assert all(p.exists() for p in result)
+    assert len(files) == 2
+    assert all(p.exists() for p in files)
     # 元のファイルは生成されない
     assert not output_file.exists()
+    assert len(word_counts) == 2
+    assert all(v > 0 for v in word_counts.values())
 
 
 def test_combine_split_file_naming(tmp_path: Path) -> None:
@@ -197,10 +203,12 @@ def test_combine_split_file_naming(tmp_path: Path) -> None:
         output_file=output_file,
         add_source_header=False,
     )
-    result = combine(config)
+    files, word_counts = combine(config)
 
-    assert result[0].name == "combined-001.md"
-    assert result[1].name == "combined-002.md"
+    assert files[0].name == "combined-001.md"
+    assert files[1].name == "combined-002.md"
+    assert files[0].as_posix() in word_counts
+    assert files[1].as_posix() in word_counts
 
 
 def test_combine_no_split_under_threshold(tmp_path: Path) -> None:
@@ -218,7 +226,9 @@ def test_combine_no_split_under_threshold(tmp_path: Path) -> None:
         output_file=output_file,
         add_source_header=False,
     )
-    result = combine(config)
+    files, word_counts = combine(config)
 
-    assert result == [output_file]
+    assert files == [output_file]
     assert output_file.exists()
+    assert output_file.as_posix() in word_counts
+    assert word_counts[output_file.as_posix()] > 0

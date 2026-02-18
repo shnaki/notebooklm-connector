@@ -50,7 +50,7 @@ def _split_sections(
     return chunks
 
 
-def combine(config: CombineConfig) -> list[Path]:
+def combine(config: CombineConfig) -> tuple[list[Path], dict[str, int]]:
     """Markdown ファイルをアルファベット順でソートし 1 ファイルに結合する。
 
     語数が閾値を超える場合はファイルを自動分割する。
@@ -59,7 +59,7 @@ def combine(config: CombineConfig) -> list[Path]:
         config: 結合設定。
 
     Returns:
-        生成された結合ファイルのパスのリスト。
+        生成された結合ファイルのパスのリストと、各ファイルの語句数の辞書のタプル。
     """
     md_files = sorted(
         config.input_dir.rglob("*.md"),
@@ -70,7 +70,7 @@ def combine(config: CombineConfig) -> list[Path]:
         logger.warning("Markdown ファイルが見つかりません: %s", config.input_dir)
         config.output_file.parent.mkdir(parents=True, exist_ok=True)
         config.output_file.write_text("", encoding="utf-8")
-        return [config.output_file]
+        return [config.output_file], {config.output_file.as_posix(): 0}
 
     sections: list[str] = []
     for md_file in md_files:
@@ -95,7 +95,7 @@ def combine(config: CombineConfig) -> list[Path]:
             config.output_file,
             word_count,
         )
-        return [config.output_file]
+        return [config.output_file], {config.output_file.as_posix(): word_count}
 
     # 閾値超過: セクション単位で分割
     chunks = _split_sections(sections, config.separator, _WORD_COUNT_WARNING_THRESHOLD)
@@ -104,10 +104,12 @@ def combine(config: CombineConfig) -> list[Path]:
     parent = config.output_file.parent
 
     output_files: list[Path] = []
+    word_counts: dict[str, int] = {}
     for i, chunk in enumerate(chunks, start=1):
         path = parent / f"{stem}-{i:03d}{suffix}"
         path.write_text(chunk, encoding="utf-8")
         output_files.append(path)
+        word_counts[path.as_posix()] = len(chunk.split())
 
     logger.info(
         "%d ファイルを %d 個に分割しました (%d 語)",
@@ -115,4 +117,4 @@ def combine(config: CombineConfig) -> list[Path]:
         len(output_files),
         word_count,
     )
-    return output_files
+    return output_files, word_counts

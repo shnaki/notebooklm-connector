@@ -353,3 +353,61 @@ def test_cli_convert_with_report(tmp_path: Path) -> None:
     data = json.loads(report_path.read_text(encoding="utf-8"))
     assert "convert_failures" in data
     assert data["convert_failures"] == []
+
+
+def test_cli_pipeline_report_has_command(tmp_path: Path) -> None:
+    """pipeline + --report で JSON に command が含まれること。"""
+    output_dir = tmp_path / "output"
+    report_path = tmp_path / "report.json"
+    mock_client = httpx.Client(transport=httpx.MockTransport(_mock_handler))
+
+    argv = [
+        "--report",
+        str(report_path),
+        "pipeline",
+        "https://example.com/docs/",
+        "-o",
+        str(output_dir),
+        "--max-pages",
+        "1",
+        "--delay",
+        "0",
+    ]
+    with patch(
+        "notebooklm_connector.crawler.httpx.Client",
+        return_value=mock_client,
+    ):
+        main(argv)
+
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "command" in data
+    assert data["command"][0] == "notebooklm-connector"
+    assert "pipeline" in data["command"]
+    assert "https://example.com/docs/" in data["command"]
+
+
+def test_cli_combine_report_has_word_counts(tmp_path: Path) -> None:
+    """combine + --report で JSON に output_word_counts が含まれること。"""
+    input_dir = tmp_path / "md"
+    input_dir.mkdir()
+    (input_dir / "page.md").write_text("word " * 100, encoding="utf-8")
+
+    output_file = tmp_path / "combined.md"
+    report_path = tmp_path / "report.json"
+    main(
+        [
+            "--report",
+            str(report_path),
+            "combine",
+            str(input_dir),
+            "-o",
+            str(output_file),
+        ]
+    )
+
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    combine_step = data["steps"][0]
+    assert "output_word_counts" in combine_step
+    assert len(combine_step["output_word_counts"]) == 1
+    word_count = next(iter(combine_step["output_word_counts"].values()))
+    assert word_count > 0

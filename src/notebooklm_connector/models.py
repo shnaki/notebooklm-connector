@@ -69,6 +69,7 @@ class StepResult:
     skipped_count: int = 0
     downloaded_count: int = 0
     failure_count: int = 0
+    output_word_counts: dict[str, int] = field(default_factory=lambda: {})
 
 
 @dataclass
@@ -79,3 +80,4 @@ class PipelineReport:
     total_elapsed_seconds: float
     crawl_failures: list[str] = field(default_factory=lambda: [])
     convert_failures: list[str] = field(default_factory=lambda: [])
+    command: list[str] = field(default_factory=lambda: [])

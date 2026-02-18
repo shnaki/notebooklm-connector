@@ -82,6 +82,7 @@ def read_report(path: Path) -> PipelineReport:
         total_elapsed_seconds=data["total_elapsed_seconds"],
         crawl_failures=data.get("crawl_failures", []),
         convert_failures=data.get("convert_failures", []),
+        command=data.get("command", []),
     )
 
 
