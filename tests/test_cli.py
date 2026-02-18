@@ -154,3 +154,64 @@ def test_cli_pipeline_with_report(tmp_path: Path) -> None:
     assert data["steps"][1]["step_name"] == "変換"
     assert data["steps"][2]["step_name"] == "結合"
     assert data["total_elapsed_seconds"] >= 0
+    assert data["crawl_failures"] == []
+    assert data["convert_failures"] == []
+    assert data["steps"][0]["skipped_count"] == 0
+    assert data["steps"][0]["downloaded_count"] == 1
+    assert "/" in data["steps"][0]["output_path"]
+
+
+def test_cli_crawl_with_report(tmp_path: Path) -> None:
+    """crawl + --report で JSON に crawl_failures キーが含まれること。"""
+    output_dir = tmp_path / "html"
+    report_path = tmp_path / "report.json"
+    mock_client = httpx.Client(transport=httpx.MockTransport(_mock_handler))
+
+    with patch(
+        "notebooklm_connector.crawler.httpx.Client",
+        return_value=mock_client,
+    ):
+        main(
+            [
+                "--report",
+                str(report_path),
+                "crawl",
+                "https://example.com/docs/",
+                "-o",
+                str(output_dir),
+                "--max-pages",
+                "1",
+                "--delay",
+                "0",
+            ]
+        )
+
+    assert report_path.exists()
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "crawl_failures" in data
+    assert data["crawl_failures"] == []
+
+
+def test_cli_convert_with_report(tmp_path: Path) -> None:
+    """convert + --report で JSON に convert_failures キーが含まれること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+    (input_dir / "page.html").write_text("<main><h1>Test</h1></main>", encoding="utf-8")
+
+    report_path = tmp_path / "report.json"
+    main(
+        [
+            "--report",
+            str(report_path),
+            "convert",
+            str(input_dir),
+            "-o",
+            str(output_dir),
+        ]
+    )
+
+    assert report_path.exists()
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "convert_failures" in data
+    assert data["convert_failures"] == []

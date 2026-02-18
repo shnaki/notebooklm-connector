@@ -113,7 +113,7 @@ def convert_html_to_markdown(
     return _normalize_whitespace(markdown)
 
 
-def _convert_single_file(html_file: Path, config: ConvertConfig) -> Path:
+def _convert_single_file(html_file: Path, config: ConvertConfig) -> Path | None:
     """単一の HTML ファイルを Markdown に変換する。
 
     Args:
@@ -121,27 +121,30 @@ def _convert_single_file(html_file: Path, config: ConvertConfig) -> Path:
         config: 変換設定。
 
     Returns:
-        生成された Markdown ファイルのパス。
+        生成された Markdown ファイルのパス。失敗時は None。
     """
     relative = html_file.relative_to(config.input_dir)
     logger.info("変換中: %s", relative)
-    html_content = html_file.read_text(encoding="utf-8")
-    markdown = convert_html_to_markdown(html_content, config)
+    try:
+        html_content = html_file.read_text(encoding="utf-8")
+        markdown = convert_html_to_markdown(html_content, config)
+        output_path = config.output_dir / relative.with_suffix(".md")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown, encoding="utf-8")
+        return output_path
+    except (OSError, PermissionError, UnicodeDecodeError):
+        logger.exception("変換失敗: %s", relative)
+        return None
 
-    output_path = config.output_dir / relative.with_suffix(".md")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(markdown, encoding="utf-8")
-    return output_path
 
-
-def convert_directory(config: ConvertConfig) -> list[Path]:
+def convert_directory(config: ConvertConfig) -> tuple[list[Path], list[str]]:
     """ディレクトリ内の全 HTML ファイルを Markdown に変換する。
 
     Args:
         config: 変換設定。
 
     Returns:
-        生成された Markdown ファイルのパスリスト。
+        (生成された Markdown ファイルのパスリスト, 失敗したファイルパスのリスト)。
     """
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -150,41 +153,49 @@ def convert_directory(config: ConvertConfig) -> list[Path]:
     )
     if not html_files:
         logger.warning("HTML ファイルが見つかりません: %s", config.input_dir)
-        return []
+        return [], []
 
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
-        output_paths = list(
+        results = list(
             executor.map(_convert_single_file, html_files, [config] * len(html_files))
         )
 
+    output_paths = [r for r in results if r is not None]
+    failed_files = [
+        html_files[i].as_posix() for i, r in enumerate(results) if r is None
+    ]
+
     logger.info("%d ファイルを変換しました", len(output_paths))
-    return output_paths
+    return output_paths, failed_files
 
 
-def _convert_html_content(args: tuple[str, str, Path, ConvertConfig]) -> Path:
+def _convert_html_content(args: tuple[str, str, Path, ConvertConfig]) -> Path | None:
     """HTML コンテンツ文字列を Markdown に変換してファイルに書き出す。
 
     Args:
         args: (エントリ名, HTML コンテンツ, 出力ディレクトリ, 変換設定) のタプル。
 
     Returns:
-        生成された Markdown ファイルのパス。
+        生成された Markdown ファイルのパス。失敗時は None。
     """
     name, html_content, output_dir, config = args
     logger.info("ZIP から変換中: %s", name)
-    markdown = convert_html_to_markdown(html_content, config)
-
-    output_path = output_dir / Path(name).with_suffix(".md")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(markdown, encoding="utf-8")
-    return output_path
+    try:
+        markdown = convert_html_to_markdown(html_content, config)
+        output_path = output_dir / Path(name).with_suffix(".md")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown, encoding="utf-8")
+        return output_path
+    except (OSError, PermissionError, UnicodeDecodeError):
+        logger.exception("ZIP 変換失敗: %s", name)
+        return None
 
 
 def convert_zip(
     zip_path: Path,
     output_dir: Path,
     config: ConvertConfig | None = None,
-) -> list[Path]:
+) -> tuple[list[Path], list[str]]:
     """ZIP アーカイブ内の HTML ファイルを Markdown に変換する。
 
     Args:
@@ -193,7 +204,7 @@ def convert_zip(
         config: 変換設定。None の場合はデフォルト設定を使用。
 
     Returns:
-        生成された Markdown ファイルのパスリスト。
+        (生成された Markdown ファイルのパスリスト, 失敗したエントリ名のリスト)。
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -214,7 +225,10 @@ def convert_zip(
 
     # 変換を並列実行
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
-        output_paths = list(executor.map(_convert_html_content, entries))
+        results = list(executor.map(_convert_html_content, entries))
+
+    output_paths = [r for r in results if r is not None]
+    failed_entries = [entries[i][0] for i, r in enumerate(results) if r is None]
 
     logger.info("ZIP から %d ファイルを変換しました", len(output_paths))
-    return output_paths
+    return output_paths, failed_entries

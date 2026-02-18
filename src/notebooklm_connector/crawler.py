@@ -107,7 +107,7 @@ def _fetch_and_save(
     config: CrawlConfig,
     url_prefix: str,
     client: httpx.Client,
-) -> tuple[Path | None, list[str]]:
+) -> tuple[Path | None, list[str], bool, str | None]:
     """単一 URL のフェッチ・保存・リンク探索をワーカースレッドで実行する。
 
     キャッシュヒット時は sleep しない（HTTP リクエストなし）。
@@ -120,7 +120,8 @@ def _fetch_and_save(
         client: httpx.Client インスタンス。
 
     Returns:
-        (保存されたファイルパス or None, 発見されたリンクのリスト)。
+        (保存されたファイルパス or None, 発見されたリンクのリスト,
+        キャッシュヒットか, 失敗URL or None)。
     """
     filename = _url_to_filename(url, config.start_url)
     filepath = config.output_dir / filename
@@ -130,7 +131,7 @@ def _fetch_and_save(
         logger.info("キャッシュ使用: %s", url)
         html = filepath.read_text(encoding="utf-8")
         new_links = _discover_links(html, url, url_prefix)
-        return filepath, new_links
+        return filepath, new_links, True, None
 
     logger.info("クロール中: %s", url)
 
@@ -139,12 +140,12 @@ def _fetch_and_save(
         response.raise_for_status()
     except httpx.HTTPError:
         logger.exception("取得失敗: %s", url)
-        return None, []
+        return None, [], False, url
 
     content_type = response.headers.get("content-type", "")
     if "text/html" not in content_type:
         logger.debug("スキップ (非 HTML): %s", url)
-        return None, []
+        return None, [], False, None
 
     html = response.text
 
@@ -158,10 +159,12 @@ def _fetch_and_save(
     if config.delay_seconds > 0:
         time.sleep(config.delay_seconds)
 
-    return filepath, new_links
+    return filepath, new_links, False, None
 
 
-def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]:
+def crawl(
+    config: CrawlConfig, client: httpx.Client | None = None
+) -> tuple[list[Path], int, int, list[str]]:
     """BFS で Web サイトをクロールし HTML ファイルを保存する。
 
     Args:
@@ -169,7 +172,8 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
         client: httpx.Client インスタンス。None の場合は新規作成。
 
     Returns:
-        保存された HTML ファイルのパスリスト。
+        (保存された HTML ファイルのパスリスト, キャッシュヒット数,
+        ダウンロード数, 失敗URL リスト)。
     """
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -179,6 +183,9 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
     visited: set[str] = set()
     pending_urls: list[str] = [config.start_url]
     saved_files: list[Path] = []
+    skipped_count = 0
+    downloaded_count = 0
+    failed_urls: list[str] = []
     lock = threading.Lock()
 
     should_close = client is None
@@ -193,7 +200,9 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
 
     try:
         with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
-            futures: set[Future[tuple[Path | None, list[str]]]] = set()
+            futures: set[Future[tuple[Path | None, list[str], bool, str | None]]] = (
+                set()
+            )
 
             def _submit_pending() -> None:
                 """pending_urls から未訪問 URL を submit する。"""
@@ -212,10 +221,16 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
             while futures:
                 done, futures = wait(futures, return_when=FIRST_COMPLETED)
                 for future in done:
-                    filepath, new_links = future.result()
+                    filepath, new_links, was_cached, failed_url = future.result()
                     with lock:
                         if filepath is not None:
                             saved_files.append(filepath)
+                        if was_cached:
+                            skipped_count += 1
+                        elif failed_url is not None:
+                            failed_urls.append(failed_url)
+                        elif filepath is not None:
+                            downloaded_count += 1
                         for link in new_links:
                             if link not in visited:
                                 pending_urls.append(link)
@@ -225,4 +240,4 @@ def crawl(config: CrawlConfig, client: httpx.Client | None = None) -> list[Path]
             client.close()
 
     logger.info("クロール完了: %d ページを保存しました", len(saved_files))
-    return saved_files
+    return saved_files, skipped_count, downloaded_count, failed_urls

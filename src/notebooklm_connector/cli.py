@@ -8,6 +8,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Any, cast
 
 from notebooklm_connector.combiner import combine
 from notebooklm_connector.converter import convert_directory, convert_zip
@@ -29,6 +30,9 @@ def _make_step_result(
     files: list[Path],
     elapsed: float,
     output_path: str,
+    skipped_count: int = 0,
+    downloaded_count: int = 0,
+    failure_count: int = 0,
 ) -> StepResult:
     """ファイルリストと経過時間から StepResult を生成する。
 
@@ -37,6 +41,9 @@ def _make_step_result(
         files: 出力ファイルのリスト。
         elapsed: 経過時間（秒）。
         output_path: 出力先パス文字列。
+        skipped_count: キャッシュヒット数。
+        downloaded_count: ダウンロード数。
+        failure_count: 失敗数。
 
     Returns:
         StepResult インスタンス。
@@ -47,7 +54,10 @@ def _make_step_result(
         file_count=len(files),
         total_bytes=total_bytes,
         elapsed_seconds=round(elapsed, 1),
-        output_path=output_path,
+        output_path=output_path.replace("\\", "/"),
+        skipped_count=skipped_count,
+        downloaded_count=downloaded_count,
+        failure_count=failure_count,
     )
 
 
@@ -184,7 +194,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run_crawl(args: argparse.Namespace) -> StepResult:
+def _run_crawl(args: argparse.Namespace) -> tuple[StepResult, list[str]]:
     """crawl サブコマンドを実行する。"""
     config = CrawlConfig(
         start_url=args.url,
@@ -194,14 +204,22 @@ def _run_crawl(args: argparse.Namespace) -> StepResult:
         max_concurrency=args.max_concurrency,
     )
     start = time.monotonic()
-    files = crawl(config)
+    files, skipped, downloaded, failed_urls = crawl(config)
     elapsed = time.monotonic() - start
-    result = _make_step_result("クロール", files, elapsed, str(args.output))
+    result = _make_step_result(
+        "クロール",
+        files,
+        elapsed,
+        str(args.output),
+        skipped_count=skipped,
+        downloaded_count=downloaded,
+        failure_count=len(failed_urls),
+    )
     print(format_step_summary(result))
-    return result
+    return result, failed_urls
 
 
-def _run_convert(args: argparse.Namespace) -> StepResult:
+def _run_convert(args: argparse.Namespace) -> tuple[StepResult, list[str]]:
     """convert サブコマンドを実行する。"""
     start = time.monotonic()
     if args.zip:
@@ -210,18 +228,24 @@ def _run_convert(args: argparse.Namespace) -> StepResult:
             output_dir=args.output,
             max_workers=args.max_workers,
         )
-        files = convert_zip(args.input, args.output, config=config)
+        files, failed_files = convert_zip(args.input, args.output, config=config)
     else:
         config = ConvertConfig(
             input_dir=args.input,
             output_dir=args.output,
             max_workers=args.max_workers,
         )
-        files = convert_directory(config)
+        files, failed_files = convert_directory(config)
     elapsed = time.monotonic() - start
-    result = _make_step_result("変換", files, elapsed, str(args.output))
+    result = _make_step_result(
+        "変換",
+        files,
+        elapsed,
+        str(args.output),
+        failure_count=len(failed_files),
+    )
     print(format_step_summary(result))
-    return result
+    return result, failed_files
 
 
 def _run_combine(args: argparse.Namespace) -> StepResult:
@@ -255,9 +279,17 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
         max_concurrency=args.max_concurrency,
     )
     start = time.monotonic()
-    crawled = crawl(crawl_config)
+    crawled, crawl_skipped, crawl_downloaded, crawl_failed = crawl(crawl_config)
     elapsed = time.monotonic() - start
-    step = _make_step_result("クロール", crawled, elapsed, str(html_dir))
+    step = _make_step_result(
+        "クロール",
+        crawled,
+        elapsed,
+        str(html_dir),
+        skipped_count=crawl_skipped,
+        downloaded_count=crawl_downloaded,
+        failure_count=len(crawl_failed),
+    )
     print(format_step_summary(step))
     steps.append(step)
 
@@ -269,9 +301,15 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
         max_workers=args.max_workers,
     )
     start = time.monotonic()
-    converted = convert_directory(convert_config)
+    converted, convert_failed = convert_directory(convert_config)
     elapsed = time.monotonic() - start
-    step = _make_step_result("変換", converted, elapsed, str(md_dir))
+    step = _make_step_result(
+        "変換",
+        converted,
+        elapsed,
+        str(md_dir),
+        failure_count=len(convert_failed),
+    )
     print(format_step_summary(step))
     steps.append(step)
 
@@ -287,7 +325,12 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
 
     # Summary
     total_elapsed = time.monotonic() - pipeline_start
-    report = PipelineReport(steps=steps, total_elapsed_seconds=round(total_elapsed, 1))
+    report = PipelineReport(
+        steps=steps,
+        total_elapsed_seconds=round(total_elapsed, 1),
+        crawl_failures=crawl_failed,
+        convert_failures=convert_failed,
+    )
     print("=== 完了 ===")
     print(f"合計: {report.total_elapsed_seconds:.1f} 秒, {len(report.steps)} ステップ")
     return report
@@ -314,10 +357,20 @@ def main(argv: list[str] | None = None) -> None:
         "combine": _run_combine,
         "pipeline": _run_pipeline,
     }
-    result = commands[args.command](args)  # type: ignore[operator]
+    result: Any = commands[args.command](args)  # type: ignore[operator]
 
     if args.report is not None:
-        if isinstance(result, StepResult):
+        if isinstance(result, tuple):
+            step_result, failures = cast(tuple[StepResult, list[str]], result)
+            crawl_failures: list[str] = failures if args.command == "crawl" else []
+            convert_failures: list[str] = failures if args.command == "convert" else []
+            report = PipelineReport(
+                steps=[step_result],
+                total_elapsed_seconds=step_result.elapsed_seconds,
+                crawl_failures=crawl_failures,
+                convert_failures=convert_failures,
+            )
+        elif isinstance(result, StepResult):
             report = PipelineReport(
                 steps=[result],
                 total_elapsed_seconds=result.elapsed_seconds,
