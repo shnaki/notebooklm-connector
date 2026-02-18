@@ -37,6 +37,7 @@ def _make_step_result(
     skipped_count: int = 0,
     downloaded_count: int = 0,
     failure_count: int = 0,
+    output_word_counts: dict[str, int] | None = None,
 ) -> StepResult:
     """ファイルリストと経過時間から StepResult を生成する。
 
@@ -48,6 +49,7 @@ def _make_step_result(
         skipped_count: キャッシュヒット数。
         downloaded_count: ダウンロード数。
         failure_count: 失敗数。
+        output_word_counts: 結合ステップの出力ファイル毎の語句数。
 
     Returns:
         StepResult インスタンス。
@@ -62,6 +64,7 @@ def _make_step_result(
         skipped_count=skipped_count,
         downloaded_count=downloaded_count,
         failure_count=failure_count,
+        output_word_counts=output_word_counts if output_word_counts is not None else {},
     )
 
 
@@ -293,9 +296,11 @@ def _run_combine(args: argparse.Namespace) -> StepResult:
     """combine サブコマンドを実行する。"""
     config = CombineConfig(input_dir=args.input, output_file=args.output)
     start = time.monotonic()
-    outputs = combine(config)
+    outputs, word_counts = combine(config)
     elapsed = time.monotonic() - start
-    result = _make_step_result("結合", outputs, elapsed, str(args.output))
+    result = _make_step_result(
+        "結合", outputs, elapsed, str(args.output), output_word_counts=word_counts
+    )
     print(format_step_summary(result))
     return result
 
@@ -404,9 +409,11 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
     # Step 3: Combine
     print("=== Step 3/3: 結合 ===")
     start = time.monotonic()
-    outputs = combine(combine_config)
+    outputs, word_counts = combine(combine_config)
     elapsed = time.monotonic() - start
-    step = _make_step_result("結合", outputs, elapsed, str(combined_file))
+    step = _make_step_result(
+        "結合", outputs, elapsed, str(combined_file), output_word_counts=word_counts
+    )
     print(format_step_summary(step))
     steps.append(step)
 
@@ -431,6 +438,7 @@ def main(argv: list[str] | None = None) -> None:
     """
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    command = sys.argv[:] if argv is None else [parser.prog] + argv
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
@@ -456,13 +464,16 @@ def main(argv: list[str] | None = None) -> None:
                 total_elapsed_seconds=step_result.elapsed_seconds,
                 crawl_failures=crawl_failures,
                 convert_failures=convert_failures,
+                command=command,
             )
         elif isinstance(result, StepResult):
             report = PipelineReport(
                 steps=[result],
                 total_elapsed_seconds=result.elapsed_seconds,
+                command=command,
             )
         elif isinstance(result, PipelineReport):
+            result.command = command
             report = result
         else:
             return
