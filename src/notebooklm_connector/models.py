@@ -66,6 +66,9 @@ class StepResult:
     total_bytes: int
     elapsed_seconds: float
     output_path: str
+    skipped_count: int = 0
+    downloaded_count: int = 0
+    failure_count: int = 0
 
 
 @dataclass
@@ -74,3 +77,5 @@ class PipelineReport:
 
     steps: list[StepResult]
     total_elapsed_seconds: float
+    crawl_failures: list[str] = field(default_factory=lambda: [])
+    convert_failures: list[str] = field(default_factory=lambda: [])

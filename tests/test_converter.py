@@ -2,6 +2,7 @@
 
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from notebooklm_connector.converter import (
     convert_directory,
@@ -89,9 +90,10 @@ def test_convert_directory_creates_md_files(tmp_path: Path) -> None:
     )
 
     config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
-    result = convert_directory(config)
+    result, failed = convert_directory(config)
 
     assert len(result) == 2
+    assert failed == []
     assert (output_dir / "page1.md").exists()
     assert (output_dir / "page2.md").exists()
     assert "Page 1" in (output_dir / "page1.md").read_text(encoding="utf-8")
@@ -104,9 +106,10 @@ def test_convert_directory_empty(tmp_path: Path) -> None:
     input_dir.mkdir()
 
     config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
-    result = convert_directory(config)
+    result, failed = convert_directory(config)
 
     assert result == []
+    assert failed == []
 
 
 def test_convert_zip_creates_md_files(tmp_path: Path) -> None:
@@ -121,9 +124,10 @@ def test_convert_zip_creates_md_files(tmp_path: Path) -> None:
             "<main><h1>Getting Started</h1></main>",
         )
 
-    result = convert_zip(zip_path, output_dir)
+    result, failed = convert_zip(zip_path, output_dir)
 
     assert len(result) == 2
+    assert failed == []
     assert (output_dir / "index.md").exists()
     assert (output_dir / "guide" / "start.md").exists()
     contents = [p.read_text(encoding="utf-8") for p in result]
@@ -141,7 +145,7 @@ def test_convert_zip_skips_macosx(tmp_path: Path) -> None:
         zf.writestr("page.html", "<main><h1>Page</h1></main>")
         zf.writestr("__MACOSX/page.html", "<main><h1>Ghost</h1></main>")
 
-    result = convert_zip(zip_path, output_dir)
+    result, failed = convert_zip(zip_path, output_dir)
 
     assert len(result) == 1
     assert "Ghost" not in result[0].read_text(encoding="utf-8")
@@ -159,7 +163,7 @@ def test_convert_directory_parallel(tmp_path: Path) -> None:
         )
 
     config = ConvertConfig(input_dir=input_dir, output_dir=output_dir, max_workers=2)
-    result = convert_directory(config)
+    result, failed = convert_directory(config)
 
     assert len(result) == 4
     for i in range(4):
@@ -182,7 +186,7 @@ def test_convert_directory_single_worker(tmp_path: Path) -> None:
     )
 
     config = ConvertConfig(input_dir=input_dir, output_dir=output_dir, max_workers=1)
-    result = convert_directory(config)
+    result, failed = convert_directory(config)
 
     assert len(result) == 2
     assert (output_dir / "page1.md").exists()
@@ -215,7 +219,7 @@ def test_convert_directory_recursive(tmp_path: Path) -> None:
     (sub_dir / "start.html").write_text("<main><h1>Start</h1></main>", encoding="utf-8")
 
     config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
-    result = convert_directory(config)
+    result, failed = convert_directory(config)
 
     assert len(result) == 2
     assert (output_dir / "index.md").exists()
@@ -234,7 +238,7 @@ def test_convert_directory_htm_extension(tmp_path: Path) -> None:
     )
 
     config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
-    result = convert_directory(config)
+    result, failed = convert_directory(config)
 
     assert len(result) == 1
     assert (output_dir / "page.md").exists()
@@ -264,8 +268,23 @@ def test_convert_zip_htm_extension(tmp_path: Path) -> None:
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("page.htm", "<main><h1>HTM in ZIP</h1></main>")
 
-    result = convert_zip(zip_path, output_dir)
+    result, failed = convert_zip(zip_path, output_dir)
 
     assert len(result) == 1
     assert (output_dir / "page.md").exists()
     assert "HTM in ZIP" in result[0].read_text(encoding="utf-8")
+
+
+def test_convert_directory_failure_collected(tmp_path: Path) -> None:
+    """読み取り失敗したファイルが failed リストに含まれること。"""
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "md"
+    input_dir.mkdir()
+    (input_dir / "page.html").write_text("<main><h1>OK</h1></main>", encoding="utf-8")
+
+    config = ConvertConfig(input_dir=input_dir, output_dir=output_dir)
+    with patch("pathlib.Path.read_text", side_effect=OSError("読み取り失敗")):
+        result, failed = convert_directory(config)
+
+    assert result == []
+    assert len(failed) == 1

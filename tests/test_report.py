@@ -90,3 +90,38 @@ def test_write_report(tmp_path: Path) -> None:
     assert data["steps"][0]["file_count"] == 10
     assert data["steps"][0]["total_bytes"] == 1024
     assert data["steps"][1]["step_name"] == "変換"
+    assert data["steps"][0]["skipped_count"] == 0
+    assert data["crawl_failures"] == []
+    assert data["convert_failures"] == []
+
+
+def test_write_report_with_failures(tmp_path: Path) -> None:
+    """失敗リストが正しくシリアライズされること。"""
+    steps = [
+        StepResult(
+            "クロール",
+            1,
+            1024,
+            5.0,
+            "out/html",
+            skipped_count=0,
+            downloaded_count=1,
+            failure_count=1,
+        ),
+    ]
+    report = PipelineReport(
+        steps=steps,
+        total_elapsed_seconds=5.0,
+        crawl_failures=["https://example.com/missing"],
+        convert_failures=["output/html/page1.html"],
+    )
+    report_path = tmp_path / "report.json"
+
+    write_report(report, report_path)
+
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert data["crawl_failures"] == ["https://example.com/missing"]
+    assert data["convert_failures"] == ["output/html/page1.html"]
+    assert data["steps"][0]["skipped_count"] == 0
+    assert data["steps"][0]["downloaded_count"] == 1
+    assert data["steps"][0]["failure_count"] == 1

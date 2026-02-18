@@ -165,11 +165,11 @@ def test_crawl_saves_html_files(tmp_path: Path) -> None:
     )
 
     client = _make_mock_client()
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
-    assert len(result) == 3
-    assert all(f.exists() for f in result)
-    assert all(f.suffix == ".html" for f in result)
+    assert len(files) == 3
+    assert all(f.exists() for f in files)
+    assert all(f.suffix == ".html" for f in files)
 
 
 def test_crawl_respects_max_pages(tmp_path: Path) -> None:
@@ -182,9 +182,9 @@ def test_crawl_respects_max_pages(tmp_path: Path) -> None:
     )
 
     client = _make_mock_client()
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
-    assert len(result) == 1
+    assert len(files) == 1
 
 
 def test_crawl_does_not_visit_external(tmp_path: Path) -> None:
@@ -197,15 +197,15 @@ def test_crawl_does_not_visit_external(tmp_path: Path) -> None:
     )
 
     client = _make_mock_client()
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
     all_content = ""
-    for f in result:
+    for f in files:
         all_content += f.read_text(encoding="utf-8")
 
     # 外部リンクの内容が含まれないこと
     # (外部リンクへのアンカーはあってもクロールされていない)
-    assert len(result) == 3  # docs/, page1, page2 のみ
+    assert len(files) == 3  # docs/, page1, page2 のみ
 
 
 def test_crawl_handles_404(tmp_path: Path) -> None:
@@ -229,10 +229,11 @@ def test_crawl_handles_404(tmp_path: Path) -> None:
     )
 
     client = httpx.Client(transport=httpx.MockTransport(handler_with_404))
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
     # 開始ページのみ保存される
-    assert len(result) == 1
+    assert len(files) == 1
+    assert len(failed) == 1
 
 
 def test_crawl_custom_prefix(tmp_path: Path) -> None:
@@ -246,11 +247,11 @@ def test_crawl_custom_prefix(tmp_path: Path) -> None:
     )
 
     client = _make_mock_client()
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
     # start_url 自体は prefix 外だが最初にアクセスされる
     # page1 のみが prefix に一致
-    assert len(result) >= 1
+    assert len(files) >= 1
 
 
 def test_crawl_uses_cache(tmp_path: Path) -> None:
@@ -274,10 +275,12 @@ def test_crawl_uses_cache(tmp_path: Path) -> None:
         raise AssertionError(f"HTTP リクエストが発生すべきでない: {request.url}")
 
     client = httpx.Client(transport=httpx.MockTransport(fail_handler))
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
-    assert len(result) == 1
-    assert result[0].read_text(encoding="utf-8") == cached_html
+    assert len(files) == 1
+    assert files[0].read_text(encoding="utf-8") == cached_html
+    assert skipped == 1
+    assert downloaded == 0
 
 
 def test_crawl_concurrent_multiple_pages(tmp_path: Path) -> None:
@@ -291,11 +294,11 @@ def test_crawl_concurrent_multiple_pages(tmp_path: Path) -> None:
     )
 
     client = _make_mock_client()
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
-    assert len(result) == 3
-    assert all(f.exists() for f in result)
-    filenames = {f.name for f in result}
+    assert len(files) == 3
+    assert all(f.exists() for f in files)
+    filenames = {f.name for f in files}
     assert "index.html" in filenames
     assert "docs_page1.html" in filenames
     assert "docs_page2.html" in filenames
@@ -312,10 +315,10 @@ def test_crawl_max_concurrency_one(tmp_path: Path) -> None:
     )
 
     client = _make_mock_client()
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
-    assert len(result) == 3
-    assert all(f.exists() for f in result)
+    assert len(files) == 3
+    assert all(f.exists() for f in files)
 
 
 def test_crawl_cache_discovers_links(tmp_path: Path) -> None:
@@ -335,10 +338,61 @@ def test_crawl_cache_discovers_links(tmp_path: Path) -> None:
     )
 
     client = _make_mock_client()
-    result = crawl(config, client=client)
+    files, skipped, downloaded, failed = crawl(config, client=client)
 
     # index.html はキャッシュ、page1 は HTTP で取得
-    assert len(result) == 2
-    filenames = {f.name for f in result}
+    assert len(files) == 2
+    filenames = {f.name for f in files}
     assert "index.html" in filenames
     assert "docs_page1.html" in filenames
+
+
+def test_crawl_tracks_downloaded_count(tmp_path: Path) -> None:
+    """ダウンロード件数が正確に追跡されること。"""
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        max_pages=10,
+        delay_seconds=0,
+    )
+
+    client = _make_mock_client()
+    files, skipped, downloaded, failed = crawl(config, client=client)
+
+    assert downloaded == len(files)
+    assert skipped == 0
+    assert failed == []
+
+
+def test_crawl_non_html_not_in_failures(tmp_path: Path) -> None:
+    """非 HTML レスポンスが failed リストに含まれないこと。"""
+
+    def handler_with_non_html(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == "https://example.com/docs/":
+            return httpx.Response(
+                200,
+                text='<a href="/docs/file.pdf">PDF</a>',
+                headers={"content-type": "text/html"},
+            )
+        # PDF として返す (非 HTML)
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4",
+            headers={"content-type": "application/pdf"},
+        )
+
+    config = CrawlConfig(
+        start_url="https://example.com/docs/",
+        output_dir=tmp_path / "html",
+        max_pages=10,
+        delay_seconds=0,
+    )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler_with_non_html))
+    files, skipped, downloaded, failed = crawl(config, client=client)
+
+    # 非 HTML は failed に含まれない
+    assert failed == []
+    # 開始ページのみ保存
+    assert len(files) == 1
