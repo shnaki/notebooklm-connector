@@ -92,9 +92,9 @@ uv run pre-commit install
 ### 開発用ツール
 
 - **Lint/Format**: Ruff
-    - `uv run --frozen ruff check .` (Lint)
-    - `uv run --frozen ruff format .` (Format)
+    - `uv run ruff check .` (Lint)
+    - `uv run ruff format .` (Format)
 - **型チェック**: Pyright
-    - `uv run --frozen pyright`
+    - `uv run pyright`
 - **テスト**: pytest
-    - `uv run --frozen pytest`
+    - `uv run pytest`

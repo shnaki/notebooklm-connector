@@ -20,7 +20,7 @@
     - 禁止事項: 関数内でのインポート: インポート文は必ずファイルの先頭に記述すること
 
 3. テスト要件
-    - フレームワーク: `uv run --frozen pytest` を利用すること
+    - フレームワーク: `uv run pytest` を利用すること
     - 非同期テスト: asyncio ではなく anyio を使用すること
     - `Test` プリフィックスをつけたクラスは利用せず関数を利用すること
     - カバレッジ: エッジケースやエラー系もテストすること
@@ -50,9 +50,9 @@
 ## コードフォーマッタ
 
 1. Ruff
-    - フォーマット: `uv run --frozen ruff format .`
-    - チェック: `uv run --frozen ruff check .`
-    - 修正: `uv run --frozen ruff check . --fix`
+    - フォーマット: `uv run ruff format .`
+    - チェック: `uv run ruff check .`
+    - 修正: `uv run ruff check . --fix`
     - 重要事項:
         - 1行の長さ (88文字)
         - インポートのソーティング (I001)
@@ -63,7 +63,7 @@
         - インポート: 可能な限り1行にまとめること
 
 2. 型チェック
-    - ツール: `uv run --frozen pyright`
+    - ツール: `uv run pyright`
     - 要件:
         - 文字列に対する型絞り込み (Type narrowing) を適切に行うこと
         - チェックがパスしていれば、バージョンに関する警告は無視してもよい
