@@ -80,4 +80,4 @@ class PipelineReport:
     total_elapsed_seconds: float
     crawl_failures: list[str] = field(default_factory=lambda: [])
     convert_failures: list[str] = field(default_factory=lambda: [])
-    command: list[str] = field(default_factory=lambda: [])
+    command: str = ""
