@@ -5,8 +5,8 @@ BFS でリンクを辿り、HTML ファイルをローカルに保存する。
 
 import logging
 import re
-import threading
 import time
+from collections import deque
 from concurrent.futures import (
     FIRST_COMPLETED,
     Future,
@@ -23,6 +23,37 @@ from bs4 import BeautifulSoup
 from notebooklm_connector.models import CrawlConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _build_http_client() -> httpx.Client:
+    """クローラ用のデフォルト httpx.Client を構築する。"""
+    return httpx.Client(
+        follow_redirects=True,
+        timeout=30.0,
+        headers={
+            "User-Agent": ("Mozilla/5.0 (compatible; NotebookLM-Connector/0.1)"),
+        },
+    )
+
+
+def _update_crawl_stats(
+    filepath: Path | None,
+    was_cached: bool,
+    failed_url: str | None,
+    saved_files: list[Path],
+    failed_urls: list[str],
+) -> tuple[int, int]:
+    """単一フェッチ結果を集計し、(skipped_increment, downloaded_increment) を返す。"""
+    if filepath is not None:
+        saved_files.append(filepath)
+    if was_cached:
+        return 1, 0
+    if failed_url is not None:
+        failed_urls.append(failed_url)
+        return 0, 0
+    if filepath is not None:
+        return 0, 1
+    return 0, 0
 
 
 def _derive_url_prefix(start_url: str) -> str:
@@ -187,22 +218,15 @@ def crawl(
     logger.info("クロール開始: %s (prefix: %s)", config.start_url, url_prefix)
 
     visited: set[str] = set()
-    pending_urls: list[str] = [config.start_url]
+    pending_urls: deque[str] = deque([config.start_url])
     saved_files: list[Path] = []
     skipped_count = 0
     downloaded_count = 0
     failed_urls: list[str] = []
-    lock = threading.Lock()
 
     should_close = client is None
     if client is None:
-        client = httpx.Client(
-            follow_redirects=True,
-            timeout=30.0,
-            headers={
-                "User-Agent": ("Mozilla/5.0 (compatible; NotebookLM-Connector/0.1)"),
-            },
-        )
+        client = _build_http_client()
 
     try:
         with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
@@ -213,7 +237,7 @@ def crawl(
             def _submit_pending() -> None:
                 """pending_urls から未訪問 URL を submit する。"""
                 while pending_urls and len(visited) < config.max_pages:
-                    url = pending_urls.pop(0)
+                    url = pending_urls.popleft()
                     if url in visited:
                         continue
                     visited.add(url)
@@ -228,18 +252,14 @@ def crawl(
                 done, futures = wait(futures, return_when=FIRST_COMPLETED)
                 for future in done:
                     filepath, new_links, was_cached, failed_url = future.result()
-                    with lock:
-                        if filepath is not None:
-                            saved_files.append(filepath)
-                        if was_cached:
-                            skipped_count += 1
-                        elif failed_url is not None:
-                            failed_urls.append(failed_url)
-                        elif filepath is not None:
-                            downloaded_count += 1
-                        for link in new_links:
-                            if link not in visited:
-                                pending_urls.append(link)
+                    skipped_inc, downloaded_inc = _update_crawl_stats(
+                        filepath, was_cached, failed_url, saved_files, failed_urls
+                    )
+                    skipped_count += skipped_inc
+                    downloaded_count += downloaded_inc
+                    for link in new_links:
+                        if link not in visited:
+                            pending_urls.append(link)
                     _submit_pending()
     finally:
         if should_close:
@@ -275,17 +295,10 @@ def crawl_urls(
     skipped_count = 0
     downloaded_count = 0
     failed_urls: list[str] = []
-    lock = threading.Lock()
 
     should_close = client is None
     if client is None:
-        client = httpx.Client(
-            follow_redirects=True,
-            timeout=30.0,
-            headers={
-                "User-Agent": ("Mozilla/5.0 (compatible; NotebookLM-Connector/0.1)")
-            },
-        )
+        client = _build_http_client()
 
     try:
         with ThreadPoolExecutor(max_workers=config.max_concurrency) as executor:
@@ -295,15 +308,11 @@ def crawl_urls(
             }
             for future in as_completed(future_to_url):
                 filepath, _new_links, was_cached, failed_url = future.result()
-                with lock:
-                    if filepath is not None:
-                        saved_files.append(filepath)
-                    if was_cached:
-                        skipped_count += 1
-                    elif failed_url is not None:
-                        failed_urls.append(failed_url)
-                    elif filepath is not None:
-                        downloaded_count += 1
+                skipped_inc, downloaded_inc = _update_crawl_stats(
+                    filepath, was_cached, failed_url, saved_files, failed_urls
+                )
+                skipped_count += skipped_inc
+                downloaded_count += downloaded_inc
     finally:
         if should_close:
             client.close()
