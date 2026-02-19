@@ -113,6 +113,18 @@ def convert_html_to_markdown(
     return _normalize_whitespace(markdown)
 
 
+def _collect_conversion_results(
+    source_labels: list[str],
+    results: list[Path | None],
+) -> tuple[list[Path], list[str]]:
+    """並列変換結果から成功パスと失敗ラベルを集計する。"""
+    output_paths = [path for path in results if path is not None]
+    failed_sources = [
+        source_labels[index] for index, path in enumerate(results) if path is None
+    ]
+    return output_paths, failed_sources
+
+
 def _convert_single_file(html_file: Path, config: ConvertConfig) -> Path | None:
     """単一の HTML ファイルを Markdown に変換する。
 
@@ -137,6 +149,19 @@ def _convert_single_file(html_file: Path, config: ConvertConfig) -> Path | None:
         return None
 
 
+def _convert_files_in_parallel(
+    html_files: list[Path],
+    config: ConvertConfig,
+) -> tuple[list[Path], list[str]]:
+    """HTML ファイル群を並列変換し、成功パスと失敗パスを返す。"""
+    with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+        results = list(
+            executor.map(_convert_single_file, html_files, [config] * len(html_files))
+        )
+    labels = [path.as_posix() for path in html_files]
+    return _collect_conversion_results(labels, results)
+
+
 def convert_directory(config: ConvertConfig) -> tuple[list[Path], list[str]]:
     """ディレクトリ内の全 HTML ファイルを Markdown に変換する。
 
@@ -155,16 +180,7 @@ def convert_directory(config: ConvertConfig) -> tuple[list[Path], list[str]]:
         logger.warning("HTML ファイルが見つかりません: %s", config.input_dir)
         return [], []
 
-    with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
-        results = list(
-            executor.map(_convert_single_file, html_files, [config] * len(html_files))
-        )
-
-    output_paths = [r for r in results if r is not None]
-    failed_files = [
-        html_files[i].as_posix() for i, r in enumerate(results) if r is None
-    ]
-
+    output_paths, failed_files = _convert_files_in_parallel(html_files, config)
     logger.info("%d ファイルを変換しました", len(output_paths))
     return output_paths, failed_files
 
@@ -200,15 +216,7 @@ def convert_failed_files(
     if not html_files:
         return [], pre_failed
 
-    with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
-        results = list(
-            executor.map(_convert_single_file, html_files, [config] * len(html_files))
-        )
-
-    output_paths = [r for r in results if r is not None]
-    convert_failed = [
-        html_files[i].as_posix() for i, r in enumerate(results) if r is None
-    ]
+    output_paths, convert_failed = _convert_files_in_parallel(html_files, config)
 
     logger.info("%d ファイルを再変換しました", len(output_paths))
     return output_paths, pre_failed + convert_failed
@@ -272,8 +280,9 @@ def convert_zip(
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
         results = list(executor.map(_convert_html_content, entries))
 
-    output_paths = [r for r in results if r is not None]
-    failed_entries = [entries[i][0] for i, r in enumerate(results) if r is None]
+    output_paths, failed_entries = _collect_conversion_results(
+        [entry[0] for entry in entries], results
+    )
 
     logger.info("ZIP から %d ファイルを変換しました", len(output_paths))
     return output_paths, failed_entries

@@ -8,6 +8,7 @@ import pytest
 from notebooklm_connector.models import PipelineReport, StepResult
 from notebooklm_connector.report import (
     _format_bytes,
+    build_step_result,
     format_pipeline_summary,
     format_step_summary,
     read_report,
@@ -55,6 +56,24 @@ def test_format_step_summary() -> None:
     assert "2.3 MB" in summary
     assert "45.2 秒" in summary
     assert "output/html" in summary
+
+
+def test_build_step_result_normalizes_path_and_size(tmp_path: Path) -> None:
+    """StepResult 生成時にサイズ集計とパス正規化が行われること。"""
+    output_file = tmp_path / "file.md"
+    output_file.write_text("hello", encoding="utf-8")
+
+    result = build_step_result(
+        step_name="変換",
+        files=[output_file],
+        output_path="out\\md",
+        elapsed_seconds=1.234,
+    )
+
+    assert result.file_count == 1
+    assert result.total_bytes == 5
+    assert result.output_path == "out/md"
+    assert result.elapsed_seconds == 1.2
 
 
 def test_format_pipeline_summary() -> None:

@@ -7,6 +7,46 @@ from pathlib import Path
 from notebooklm_connector.models import PipelineReport, StepResult
 
 
+def build_step_result(
+    step_name: str,
+    files: list[Path],
+    output_path: str,
+    elapsed_seconds: float | None = None,
+    skipped_count: int = 0,
+    downloaded_count: int = 0,
+    failure_count: int = 0,
+    output_word_counts: dict[str, int] | None = None,
+) -> StepResult:
+    """ファイル群から StepResult を構築する。
+
+    Args:
+        step_name: ステップ名。
+        files: 出力ファイル一覧。
+        output_path: 出力先パス文字列。
+        elapsed_seconds: 経過時間（秒）。None の場合は 0.0。
+        skipped_count: キャッシュヒット数。
+        downloaded_count: ダウンロード数。
+        failure_count: 失敗件数。
+        output_word_counts: 結合出力ファイルごとの語数。
+
+    Returns:
+        集計済み StepResult。
+    """
+    total_bytes = sum(path.stat().st_size for path in files if path.exists())
+    elapsed = 0.0 if elapsed_seconds is None else elapsed_seconds
+    return StepResult(
+        step_name=step_name,
+        file_count=len(files),
+        total_bytes=total_bytes,
+        elapsed_seconds=round(elapsed, 1),
+        output_path=output_path.replace("\\", "/"),
+        skipped_count=skipped_count,
+        downloaded_count=downloaded_count,
+        failure_count=failure_count,
+        output_word_counts={} if output_word_counts is None else output_word_counts,
+    )
+
+
 def _format_bytes(size: int) -> str:
     """バイト数を人間が読みやすい形式に変換する。
 
