@@ -381,7 +381,7 @@ def test_cli_pipeline_report_has_command(tmp_path: Path) -> None:
 
     data = json.loads(report_path.read_text(encoding="utf-8"))
     assert "command" in data
-    assert data["command"][0] == "notebooklm-connector"
+    assert data["command"].startswith("notebooklm-connector")
     assert "pipeline" in data["command"]
     assert "https://example.com/docs/" in data["command"]
 

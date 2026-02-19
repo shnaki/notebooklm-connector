@@ -438,7 +438,8 @@ def main(argv: list[str] | None = None) -> None:
     """
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    command = sys.argv[:] if argv is None else [parser.prog] + argv
+    raw_args = argv if argv is not None else sys.argv[1:]
+    command = "notebooklm-connector " + " ".join(a.replace("\\", "/") for a in raw_args)
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(

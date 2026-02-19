@@ -197,20 +197,14 @@ def test_write_report_with_command(tmp_path: Path) -> None:
     report = PipelineReport(
         steps=steps,
         total_elapsed_seconds=5.0,
-        command=["notebooklm-connector", "crawl", "https://example.com/", "-o", "out"],
+        command="notebooklm-connector crawl https://example.com/ -o out",
     )
     report_path = tmp_path / "report.json"
 
     write_report(report, report_path)
 
     data = json.loads(report_path.read_text(encoding="utf-8"))
-    assert data["command"] == [
-        "notebooklm-connector",
-        "crawl",
-        "https://example.com/",
-        "-o",
-        "out",
-    ]
+    assert data["command"] == "notebooklm-connector crawl https://example.com/ -o out"
 
 
 def test_read_report_with_command(tmp_path: Path) -> None:
@@ -219,13 +213,7 @@ def test_read_report_with_command(tmp_path: Path) -> None:
     original = PipelineReport(
         steps=steps,
         total_elapsed_seconds=5.0,
-        command=[
-            "notebooklm-connector",
-            "pipeline",
-            "https://example.com/",
-            "-o",
-            "out",
-        ],
+        command="notebooklm-connector pipeline https://example.com/ -o out",
     )
     report_path = tmp_path / "report.json"
 
@@ -254,7 +242,7 @@ def test_read_report_command_defaults_empty(tmp_path: Path) -> None:
 
     restored = read_report(report_path)
 
-    assert restored.command == []
+    assert restored.command == ""
 
 
 def test_write_report_with_output_word_counts(tmp_path: Path) -> None:
