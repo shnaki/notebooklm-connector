@@ -7,8 +7,8 @@ import argparse
 import logging
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
 
 from notebooklm_connector.combiner import combine
 from notebooklm_connector.converter import (
@@ -24,48 +24,16 @@ from notebooklm_connector.models import (
     PipelineReport,
     StepResult,
 )
-from notebooklm_connector.report import format_step_summary, read_report, write_report
+from notebooklm_connector.report import (
+    build_step_result,
+    format_step_summary,
+    read_report,
+    write_report,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _make_step_result(
-    step_name: str,
-    files: list[Path],
-    elapsed: float,
-    output_path: str,
-    skipped_count: int = 0,
-    downloaded_count: int = 0,
-    failure_count: int = 0,
-    output_word_counts: dict[str, int] | None = None,
-) -> StepResult:
-    """ファイルリストと経過時間から StepResult を生成する。
-
-    Args:
-        step_name: ステップ名。
-        files: 出力ファイルのリスト。
-        elapsed: 経過時間（秒）。
-        output_path: 出力先パス文字列。
-        skipped_count: キャッシュヒット数。
-        downloaded_count: ダウンロード数。
-        failure_count: 失敗数。
-        output_word_counts: 結合ステップの出力ファイル毎の語句数。
-
-    Returns:
-        StepResult インスタンス。
-    """
-    total_bytes = sum(f.stat().st_size for f in files if f.exists())
-    return StepResult(
-        step_name=step_name,
-        file_count=len(files),
-        total_bytes=total_bytes,
-        elapsed_seconds=round(elapsed, 1),
-        output_path=output_path.replace("\\", "/"),
-        skipped_count=skipped_count,
-        downloaded_count=downloaded_count,
-        failure_count=failure_count,
-        output_word_counts=output_word_counts if output_word_counts is not None else {},
-    )
+CommandResult = StepResult | PipelineReport | tuple[StepResult, list[str]]
+CommandHandler = Callable[[argparse.Namespace], CommandResult]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -224,27 +192,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run_crawl(args: argparse.Namespace) -> tuple[StepResult, list[str]]:
     """crawl サブコマンドを実行する。"""
-    config = CrawlConfig(
-        start_url=args.url,
-        output_dir=args.output,
-        max_pages=args.max_pages,
-        delay_seconds=args.delay,
-        max_concurrency=args.max_concurrency,
+    config = _build_crawl_config(args.url, args.output, args)
+    files, skipped, downloaded, failed_urls = _run_crawl_job(
+        config, args.retry_from_report
     )
-    retry_report_path: Path | None = args.retry_from_report
-    start = time.monotonic()
-    if retry_report_path is not None:
-        prev_report = read_report(retry_report_path)
-        files, skipped, downloaded, failed_urls = crawl_urls(
-            prev_report.crawl_failures, config
-        )
-    else:
-        files, skipped, downloaded, failed_urls = crawl(config)
-    elapsed = time.monotonic() - start
-    result = _make_step_result(
+    result = build_step_result(
         "クロール",
         files,
-        elapsed,
         str(args.output),
         skipped_count=skipped,
         downloaded_count=downloaded,
@@ -256,35 +210,15 @@ def _run_crawl(args: argparse.Namespace) -> tuple[StepResult, list[str]]:
 
 def _run_convert(args: argparse.Namespace) -> tuple[StepResult, list[str]]:
     """convert サブコマンドを実行する。"""
-    retry_report_path: Path | None = args.retry_from_report
-    start = time.monotonic()
-    if retry_report_path is not None:
-        prev_report = read_report(retry_report_path)
-        config = ConvertConfig(
-            input_dir=args.input,
-            output_dir=args.output,
-            max_workers=args.max_workers,
-        )
-        files, failed_files = convert_failed_files(prev_report.convert_failures, config)
-    elif args.zip:
-        config = ConvertConfig(
-            input_dir=Path("."),
-            output_dir=args.output,
-            max_workers=args.max_workers,
-        )
-        files, failed_files = convert_zip(args.input, args.output, config=config)
-    else:
-        config = ConvertConfig(
-            input_dir=args.input,
-            output_dir=args.output,
-            max_workers=args.max_workers,
-        )
-        files, failed_files = convert_directory(config)
-    elapsed = time.monotonic() - start
-    result = _make_step_result(
+    config = _build_convert_config(args.input, args.output, args.max_workers)
+    files, failed_files = _run_convert_job(
+        config=config,
+        retry_report_path=args.retry_from_report,
+        zip_input=args.input if args.zip else None,
+    )
+    result = build_step_result(
         "変換",
         files,
-        elapsed,
         str(args.output),
         failure_count=len(failed_files),
     )
@@ -298,8 +232,12 @@ def _run_combine(args: argparse.Namespace) -> StepResult:
     start = time.monotonic()
     outputs, word_counts = combine(config)
     elapsed = time.monotonic() - start
-    result = _make_step_result(
-        "結合", outputs, elapsed, str(args.output), output_word_counts=word_counts
+    result = build_step_result(
+        "結合",
+        outputs,
+        str(args.output),
+        elapsed_seconds=elapsed,
+        output_word_counts=word_counts,
     )
     print(format_step_summary(result))
     return result
@@ -316,18 +254,8 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
     pipeline_start = time.monotonic()
     steps: list[StepResult] = []
 
-    crawl_config = CrawlConfig(
-        start_url=args.url,
-        output_dir=html_dir,
-        max_pages=args.max_pages,
-        delay_seconds=args.delay,
-        max_concurrency=args.max_concurrency,
-    )
-    convert_config = ConvertConfig(
-        input_dir=html_dir,
-        output_dir=md_dir,
-        max_workers=args.max_workers,
-    )
+    crawl_config = _build_crawl_config(args.url, html_dir, args)
+    convert_config = _build_convert_config(html_dir, md_dir, args.max_workers)
     combine_config = CombineConfig(input_dir=md_dir, output_file=combined_file)
 
     crawl_failed: list[str] = []
@@ -338,81 +266,57 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
 
         # Step 1: Crawl (リトライ)
         print("=== Step 1/3: クロール (リトライ) ===")
-        start = time.monotonic()
-        crawled, crawl_skipped, crawl_downloaded, crawl_failed = crawl_urls(
-            prev_report.crawl_failures, crawl_config
-        )
-        elapsed = time.monotonic() - start
-        step = _make_step_result(
-            "クロール",
+        (
+            crawl_step,
             crawled,
-            elapsed,
-            str(html_dir),
-            skipped_count=crawl_skipped,
-            downloaded_count=crawl_downloaded,
-            failure_count=len(crawl_failed),
+            crawl_failed,
+        ) = _run_pipeline_crawl_step(
+            crawl_config,
+            html_dir,
+            retry_urls=prev_report.crawl_failures,
         )
-        print(format_step_summary(step))
-        steps.append(step)
+        steps.append(crawl_step)
 
         # Step 2: Convert (リトライ: 前回変換失敗 + 新規クロール分)
         print("=== Step 2/3: 変換 (リトライ) ===")
         convert_targets = prev_report.convert_failures + [p.as_posix() for p in crawled]
-        start = time.monotonic()
-        converted, convert_failed = convert_failed_files(
-            convert_targets, convert_config
+        (
+            convert_step,
+            convert_failed,
+        ) = _run_pipeline_convert_step(
+            convert_config,
+            md_dir,
+            retry_targets=convert_targets,
         )
-        elapsed = time.monotonic() - start
-        step = _make_step_result(
-            "変換",
-            converted,
-            elapsed,
-            str(md_dir),
-            failure_count=len(convert_failed),
-        )
-        print(format_step_summary(step))
-        steps.append(step)
+        steps.append(convert_step)
 
     else:
         # Step 1: Crawl
         print("=== Step 1/3: クロール ===")
-        start = time.monotonic()
-        crawled, crawl_skipped, crawl_downloaded, crawl_failed = crawl(crawl_config)
-        elapsed = time.monotonic() - start
-        step = _make_step_result(
-            "クロール",
-            crawled,
-            elapsed,
-            str(html_dir),
-            skipped_count=crawl_skipped,
-            downloaded_count=crawl_downloaded,
-            failure_count=len(crawl_failed),
+        crawl_step, _crawled, crawl_failed = _run_pipeline_crawl_step(
+            crawl_config,
+            html_dir,
         )
-        print(format_step_summary(step))
-        steps.append(step)
+        steps.append(crawl_step)
 
         # Step 2: Convert
         print("=== Step 2/3: 変換 ===")
-        start = time.monotonic()
-        converted, convert_failed = convert_directory(convert_config)
-        elapsed = time.monotonic() - start
-        step = _make_step_result(
-            "変換",
-            converted,
-            elapsed,
-            str(md_dir),
-            failure_count=len(convert_failed),
+        convert_step, convert_failed = _run_pipeline_convert_step(
+            convert_config, md_dir
         )
-        print(format_step_summary(step))
-        steps.append(step)
+        steps.append(convert_step)
 
     # Step 3: Combine
     print("=== Step 3/3: 結合 ===")
     start = time.monotonic()
     outputs, word_counts = combine(combine_config)
     elapsed = time.monotonic() - start
-    step = _make_step_result(
-        "結合", outputs, elapsed, str(combined_file), output_word_counts=word_counts
+    step = build_step_result(
+        "結合",
+        outputs,
+        str(combined_file),
+        elapsed_seconds=elapsed,
+        output_word_counts=word_counts,
     )
     print(format_step_summary(step))
     steps.append(step)
@@ -428,6 +332,138 @@ def _run_pipeline(args: argparse.Namespace) -> PipelineReport:
     print("=== 完了 ===")
     print(f"合計: {report.total_elapsed_seconds:.1f} 秒, {len(report.steps)} ステップ")
     return report
+
+
+def _build_crawl_config(
+    start_url: str, output_dir: Path, args: argparse.Namespace
+) -> CrawlConfig:
+    """CLI 引数から CrawlConfig を構築する。"""
+    return CrawlConfig(
+        start_url=start_url,
+        output_dir=output_dir,
+        max_pages=args.max_pages,
+        delay_seconds=args.delay,
+        max_concurrency=args.max_concurrency,
+    )
+
+
+def _build_convert_config(
+    input_dir: Path,
+    output_dir: Path,
+    max_workers: int | None,
+) -> ConvertConfig:
+    """CLI 引数から ConvertConfig を構築する。"""
+    return ConvertConfig(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        max_workers=max_workers,
+    )
+
+
+def _run_crawl_job(
+    config: CrawlConfig,
+    retry_report_path: Path | None = None,
+) -> tuple[list[Path], int, int, list[str]]:
+    """クロール処理を実行し、結果タプルを返す。"""
+    if retry_report_path is None:
+        files, skipped, downloaded, failed_urls = crawl(config)
+    else:
+        prev_report = read_report(retry_report_path)
+        files, skipped, downloaded, failed_urls = crawl_urls(
+            prev_report.crawl_failures, config
+        )
+    return files, skipped, downloaded, failed_urls
+
+
+def _run_convert_job(
+    config: ConvertConfig,
+    retry_report_path: Path | None = None,
+    zip_input: Path | None = None,
+) -> tuple[list[Path], list[str]]:
+    """変換処理を実行し、成功ファイルと失敗一覧を返す。"""
+    if retry_report_path is not None:
+        prev_report = read_report(retry_report_path)
+        return convert_failed_files(prev_report.convert_failures, config)
+    if zip_input is not None:
+        return convert_zip(zip_input, config.output_dir, config=config)
+    return convert_directory(config)
+
+
+def _run_pipeline_crawl_step(
+    crawl_config: CrawlConfig,
+    output_dir: Path,
+    retry_urls: list[str] | None = None,
+) -> tuple[StepResult, list[Path], list[str]]:
+    """pipeline 用の crawl ステップを実行する。"""
+    start = time.monotonic()
+    if retry_urls is None:
+        crawled, crawl_skipped, crawl_downloaded, crawl_failed = crawl(crawl_config)
+    else:
+        crawled, crawl_skipped, crawl_downloaded, crawl_failed = crawl_urls(
+            retry_urls, crawl_config
+        )
+    step = build_step_result(
+        "クロール",
+        crawled,
+        str(output_dir),
+        elapsed_seconds=time.monotonic() - start,
+        skipped_count=crawl_skipped,
+        downloaded_count=crawl_downloaded,
+        failure_count=len(crawl_failed),
+    )
+    print(format_step_summary(step))
+    return step, crawled, crawl_failed
+
+
+def _run_pipeline_convert_step(
+    convert_config: ConvertConfig,
+    output_dir: Path,
+    retry_targets: list[str] | None = None,
+) -> tuple[StepResult, list[str]]:
+    """pipeline 用の convert ステップを実行する。"""
+    start = time.monotonic()
+    if retry_targets is None:
+        converted, convert_failed = convert_directory(convert_config)
+    else:
+        converted, convert_failed = convert_failed_files(retry_targets, convert_config)
+    step = build_step_result(
+        "変換",
+        converted,
+        str(output_dir),
+        elapsed_seconds=time.monotonic() - start,
+        failure_count=len(convert_failed),
+    )
+    print(format_step_summary(step))
+    return step, convert_failed
+
+
+def _build_report(
+    result: CommandResult,
+    command_name: str,
+    command: str,
+) -> PipelineReport:
+    """コマンド実行結果から PipelineReport を構築する。"""
+    if isinstance(result, tuple):
+        step_result, failures = result
+        crawl_failures: list[str] = failures if command_name == "crawl" else []
+        convert_failures: list[str] = failures if command_name == "convert" else []
+        return PipelineReport(
+            steps=[step_result],
+            total_elapsed_seconds=step_result.elapsed_seconds,
+            crawl_failures=crawl_failures,
+            convert_failures=convert_failures,
+            command=command,
+        )
+
+    if isinstance(result, StepResult):
+        return PipelineReport(
+            steps=[result],
+            total_elapsed_seconds=result.elapsed_seconds,
+            command=command,
+        )
+
+    result.command = command
+    return result
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -447,36 +483,18 @@ def main(argv: list[str] | None = None) -> None:
         format="%(levelname)s: %(message)s",
     )
 
-    commands: dict[str, object] = {
+    commands: dict[str, CommandHandler] = {
         "crawl": _run_crawl,
         "convert": _run_convert,
         "combine": _run_combine,
         "pipeline": _run_pipeline,
     }
-    result: Any = commands[args.command](args)  # type: ignore[operator]
+    command_handler = commands.get(args.command)
+    if command_handler is None:
+        parser.error(f"Unknown command: {args.command}")
+    result = command_handler(args)
 
     if args.report is not None:
-        if isinstance(result, tuple):
-            step_result, failures = cast(tuple[StepResult, list[str]], result)
-            crawl_failures: list[str] = failures if args.command == "crawl" else []
-            convert_failures: list[str] = failures if args.command == "convert" else []
-            report = PipelineReport(
-                steps=[step_result],
-                total_elapsed_seconds=step_result.elapsed_seconds,
-                crawl_failures=crawl_failures,
-                convert_failures=convert_failures,
-                command=command,
-            )
-        elif isinstance(result, StepResult):
-            report = PipelineReport(
-                steps=[result],
-                total_elapsed_seconds=result.elapsed_seconds,
-                command=command,
-            )
-        elif isinstance(result, PipelineReport):
-            result.command = command
-            report = result
-        else:
-            return
+        report = _build_report(result, args.command, command)
         write_report(report, args.report)
         print(f"レポートを保存しました: {args.report}")
